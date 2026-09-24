@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HeadHunter Sync (Local)",
+  "identifier": "com.headhunter.sync.local",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "HeadHunter Sync (Local)",
+        "width": 560,
+        "height": 720,
+        "minWidth": 480,
+        "minHeight": 560,
+        "center": true
+      }
+    ]
+  }
+}
