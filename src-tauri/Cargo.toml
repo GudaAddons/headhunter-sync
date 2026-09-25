@@ -28,9 +28,12 @@ tauri-plugin-dialog = "2.7.3"
 tauri-plugin-notification = "2.4.0"
 notify = "8.2.0"
 thiserror = "2.0.21"
-tokio = { version = "1.53.1", features = ["time", "sync", "macros"] }
+tokio = { version = "1.53.1", features = ["time", "sync", "macros", "net", "io-util"] }
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.11.0"
+base64 = "0.23.1"
+rand = "0.10.3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

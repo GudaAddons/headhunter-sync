@@ -122,7 +122,7 @@ impl Engine {
     pub fn signed_in(&self, user: User) {
         let mut settings = self.settings();
         settings.user_name = Some(user.name);
-        settings.email = Some(user.email);
+        settings.email = user.email;
         let _ = store::save(&self.data_dir.join("settings.json"), &settings);
         *self.settings.lock().unwrap() = settings;
         *self.problem.lock().unwrap() = None;
@@ -139,7 +139,7 @@ impl Engine {
     fn user(&self) -> Option<User> {
         let settings = self.settings();
         store::token()?;
-        Some(User { name: settings.user_name.unwrap_or_default(), email: settings.email.unwrap_or_default() })
+        Some(User { name: settings.user_name.unwrap_or_default(), email: settings.email })
     }
 
     pub fn installs(&self) -> Vec<Install> {

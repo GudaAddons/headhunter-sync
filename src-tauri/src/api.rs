@@ -10,7 +10,8 @@ use crate::payload::Payload;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct User {
     pub name: String,
-    pub email: String,
+    /// None for an account made with Battle.net, which shares no email.
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,21 +69,20 @@ impl Api {
             .send()
             .await
             .map_err(|e| offline_message(&e))?;
-        let status = response.status().as_u16();
-        let body: Value = response.json().await.unwrap_or(Value::Null);
-        match status {
-            200 | 201 => {
-                let token = body["token"].as_str().ok_or("The website sent no token.")?.to_string();
-                let user = User {
-                    name: body["user"]["name"].as_str().unwrap_or_default().to_string(),
-                    email: body["user"]["email"].as_str().unwrap_or(email).to_string(),
-                };
-                Ok((token, user))
-            }
-            422 => Err(first_error(&body).unwrap_or_else(|| "Check your email and password.".into())),
-            429 => Err("Too many tries. Wait a minute and try again.".into()),
-            _ => Err(format!("The website answered {status}. Try again later.")),
-        }
+        token_answer(response, "Check your email and password.").await
+    }
+
+    /// "Sign in with browser": trades the website's single-use code for a device token.
+    pub async fn exchange(&self, code: &str, verifier: &str, redirect_uri: &str, device: &str) -> Result<(String, User), String> {
+        let response = self
+            .http
+            .post(config::api("auth/exchange"))
+            .header("Accept", "application/json")
+            .json(&serde_json::json!({ "code": code, "code_verifier": verifier, "redirect_uri": redirect_uri, "device_name": device }))
+            .send()
+            .await
+            .map_err(|e| offline_message(&e))?;
+        token_answer(response, "The sign in expired. Try again.").await
     }
 
     pub async fn sign_out(&self, token: &str) {
@@ -141,6 +141,27 @@ impl Api {
     }
 }
 
+async fn token_answer(response: reqwest::Response, refused: &str) -> Result<(String, User), String> {
+    let status = response.status().as_u16();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    match status {
+        200 | 201 => {
+            let token = body["token"].as_str().ok_or("The website sent no token.")?.to_string();
+            Ok((token, user_from(&body["user"])))
+        }
+        422 => Err(first_error(&body).unwrap_or_else(|| refused.into())),
+        429 => Err("Too many tries. Wait a minute and try again.".into()),
+        _ => Err(format!("The website answered {status}. Try again later.")),
+    }
+}
+
+fn user_from(u: &Value) -> User {
+    User {
+        name: u["name"].as_str().unwrap_or_default().to_string(),
+        email: u["email"].as_str().map(String::from),
+    }
+}
+
 fn upload_info(u: &Value) -> UploadInfo {
     UploadInfo {
         id: u["id"].as_i64().unwrap_or_default(),
@@ -184,6 +205,12 @@ mod tests {
         let body = json!({ "message": "The given data was invalid.", "errors": { "email": ["These credentials do not match our records."] } });
         assert_eq!(first_error(&body).as_deref(), Some("These credentials do not match our records."));
         assert_eq!(first_error(&json!({ "message": "Nope" })).as_deref(), Some("Nope"));
+    }
+
+    #[test]
+    fn reads_a_user_with_or_without_email() {
+        assert_eq!(user_from(&json!({ "name": "Tess", "email": "tess@example.com" })).email.as_deref(), Some("tess@example.com"));
+        assert_eq!(user_from(&json!({ "name": "Tess", "email": null })), User { name: "Tess".into(), email: None });
     }
 
     #[test]

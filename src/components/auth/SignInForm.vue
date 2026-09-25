@@ -2,6 +2,7 @@
 import { CircleAlertIcon } from '@lucide/vue';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { ref } from 'vue';
+import BrowserSignIn from '@/components/auth/BrowserSignIn.vue';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,6 +11,8 @@ import { Label } from '@/components/ui/label';
 const props = defineProps<{
     apiUrl: string;
     signIn: (email: string, password: string) => Promise<unknown>;
+    signInWithBrowser: () => Promise<unknown>;
+    cancelBrowserSignIn: () => Promise<unknown>;
 }>();
 
 const emit = defineEmits<{
@@ -49,6 +52,20 @@ async function submit(): Promise<void> {
             </p>
         </header>
 
+        <BrowserSignIn
+            :start="signInWithBrowser"
+            :cancel="cancelBrowserSignIn"
+            @signed-in="emit('signedIn')"
+        />
+
+        <div
+            class="flex items-center gap-3 text-xs tracking-widest text-muted-foreground uppercase"
+        >
+            <span class="h-px flex-1 bg-border" />
+            or with email
+            <span class="h-px flex-1 bg-border" />
+        </div>
+
         <Alert v-if="error" variant="destructive" class="bg-card/90">
             <CircleAlertIcon />
             <AlertDescription>{{ error }}</AlertDescription>
@@ -75,7 +92,7 @@ async function submit(): Promise<void> {
                     required
                 />
             </div>
-            <Button type="submit" variant="gold" size="lg" :disabled="busy">
+            <Button type="submit" variant="outline" size="lg" :disabled="busy">
                 {{ busy ? 'Signing in...' : 'Sign in' }}
             </Button>
         </form>

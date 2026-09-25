@@ -26,5 +26,10 @@ pub fn keyring_service() -> &'static str {
 }
 
 pub fn api(path: &str) -> String {
-    format!("{}/api/v1/{}", API_URL.trim_end_matches('/'), path.trim_start_matches('/'))
+    web(&format!("api/v1/{}", path.trim_start_matches('/')))
+}
+
+/// A page on the website, e.g. "app/connect".
+pub fn web(path: &str) -> String {
+    format!("{}/{}", API_URL.trim_end_matches('/'), path.trim_start_matches('/'))
 }

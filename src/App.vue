@@ -26,6 +26,8 @@ async function signOut(): Promise<void> {
                 v-if="!status.user"
                 :api-url="status.api_url"
                 :sign-in="sync.signIn"
+                :sign-in-with-browser="sync.signInWithBrowser"
+                :cancel-browser-sign-in="sync.cancelBrowserSignIn"
                 @signed-in="sync.refresh"
             />
 

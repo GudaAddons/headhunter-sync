@@ -4,7 +4,7 @@ export type Client = 'era' | 'forever';
 
 export type User = {
     name: string;
-    email: string;
+    email: string | null;
 };
 
 export type SyncResult = {

@@ -2,6 +2,7 @@
 //! HeadHunter website. Lives in the system tray; the window shows status and settings.
 
 pub mod api;
+pub mod browser_auth;
 pub mod config;
 pub mod installs;
 pub mod lua;
@@ -9,13 +10,15 @@ pub mod payload;
 pub mod store;
 pub mod sync;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Listener, Manager, State, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_opener::OpenerExt;
+use tokio::sync::oneshot;
 
 use api::{UploadInfo, User};
 use store::Settings;
@@ -31,10 +34,50 @@ fn get_status(engine: Shared<'_>) -> Status {
 #[tauri::command]
 async fn sign_in(app: AppHandle, engine: Shared<'_>, email: String, password: String) -> Result<User, String> {
     let (token, user) = engine.api().sign_in(email.trim(), &password, &sync::device_name()).await?;
-    store::set_token(&token)?;
+    signed_in(&app, &engine, &token, user)
+}
+
+/// The browser sign-in waiting for the player; a new one or Cancel stops it.
+#[derive(Default)]
+struct BrowserSignIn(Mutex<Option<oneshot::Sender<()>>>);
+
+#[tauri::command]
+async fn sign_in_with_browser(app: AppHandle, engine: Shared<'_>, pending: State<'_, BrowserSignIn>) -> Result<User, String> {
+    let (cancel, cancelled) = oneshot::channel();
+    if let Some(previous) = pending.0.lock().unwrap().replace(cancel) {
+        let _ = previous.send(());
+    }
+
+    let callback = browser_auth::Callback::bind().await?;
+    let pkce = browser_auth::Pkce::new();
+    let state = browser_auth::random_token();
+    let device = sync::device_name();
+    let url = browser_auth::connect_url(&pkce, &state, &callback.redirect_uri, &device);
+    app.opener().open_url(url, None::<&str>).map_err(|e| format!("Could not open the browser: {e}"))?;
+
+    let code = tokio::select! {
+        result = tokio::time::timeout(browser_auth::WAIT, callback.code(&state)) => {
+            result.map_err(|_| "The sign in took too long. Try again.".to_string())??
+        }
+        _ = cancelled => return Err("Sign in was cancelled.".into()),
+    };
+    show_window(&app);
+    let (token, user) = engine.api().exchange(&code, &pkce.verifier, &callback.redirect_uri, &device).await?;
+    signed_in(&app, &engine, &token, user)
+}
+
+#[tauri::command]
+fn cancel_browser_sign_in(pending: State<'_, BrowserSignIn>) {
+    if let Some(cancel) = pending.0.lock().unwrap().take() {
+        let _ = cancel.send(());
+    }
+}
+
+fn signed_in(app: &AppHandle, engine: &Engine, token: &str, user: User) -> Result<User, String> {
+    store::set_token(token)?;
     engine.signed_in(user.clone());
     engine.request(Duration::from_secs(1));
-    refresh_tray(&app, &engine);
+    refresh_tray(app, engine);
     Ok(user)
 }
 
@@ -130,6 +173,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             let engine = Engine::new(data_dir);
             app.manage(Arc::clone(&engine));
+            app.manage(BrowserSignIn::default());
             build_tray(app.handle())?;
             engine.rewatch();
             engine.start_scheduler(app.handle().clone());
@@ -158,6 +202,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             sign_in,
+            sign_in_with_browser,
+            cancel_browser_sign_in,
             sign_out,
             sync_now,
             get_settings,

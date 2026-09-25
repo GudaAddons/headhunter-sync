@@ -29,6 +29,8 @@ export function useSync() {
         status,
         refresh,
         signIn: (email: string, password: string) => invoke<User>('sign_in', { email, password }),
+        signInWithBrowser: () => invoke<User>('sign_in_with_browser'),
+        cancelBrowserSignIn: () => invoke('cancel_browser_sign_in'),
         signOut: () => invoke('sign_out'),
         syncNow: () => invoke('sync_now'),
         getSettings: () => invoke<Settings>('get_settings'),
