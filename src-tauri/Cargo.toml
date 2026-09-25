@@ -1,6 +1,6 @@
 [package]
 name = "headhunter-sync"
-version = "0.1.0"
+version = "0.1.1"
 description = "Uploads HeadHunter addon data to the HeadHunter website and brings its lists back into the game"
 authors = ["Vati"]
 license = "MIT"
