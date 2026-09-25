@@ -54,6 +54,29 @@ Repository settings the workflow needs: variable `HEADHUNTER_API_URL` (https), s
 `%USERPROFILE%\.tauri\headhunter-sync.key` (+ `.password`, `.pub`); the public key is in
 `tauri.conf.json`. Keep a backup of the private key: without it, installed apps can never update again.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [Vati](https://github.com/vatichild)
+- Approvers: [Vati](https://github.com/vatichild)
+
+Only the installers built by this repository's GitHub Actions release workflow, from a
+version tag, are signed. Each signing request is approved by an approver.
+
+## Privacy policy
+
+This program will not transfer any information to other networked systems unless specifically
+requested by the user or the person installing or operating it. When you sign in, it sends your
+HeadHunter addon data (your deaths, catches, duels and bounty, read from `HeadHunter.lua`) to the
+HeadHunter website, and downloads the website's lists back into the game; it checks GitHub for
+app updates. Nothing else leaves your PC.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
+
 ## How it works
 
 - `src-tauri/src/installs.rs` finds the WoW folder (Blizzard registry key, common paths, or the
