@@ -40,8 +40,11 @@ const REALM_TYPES = [
     { value: 'hardcore', label: 'Hardcore' },
 ];
 
+// The Forever beta has one region, so it shows as chosen instead of "From the addon"
+const isForever = computed(() => props.install.client === 'forever');
+
 const region = computed({
-    get: () => options.value.region ?? AUTO,
+    get: () => options.value.region ?? (isForever.value ? 'us' : AUTO),
     set: (value: string) => {
         options.value = { ...options.value, region: value === AUTO ? null : value };
     },
@@ -77,7 +80,9 @@ const realmType = computed({
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                        <SelectItem :value="AUTO">From the addon</SelectItem>
+                        <SelectItem v-if="!isForever" :value="AUTO">
+                            From the addon
+                        </SelectItem>
                         <SelectItem
                             v-for="option in regions"
                             :key="option.value"
