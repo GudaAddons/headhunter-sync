@@ -7,6 +7,11 @@ export type User = {
     email: string | null;
 };
 
+export type UpdateInfo = {
+    version: string;
+    notes: string | null;
+};
+
 export type SyncResult = {
     at: number;
     outcome: 'sent' | 'already_there' | 'claimed' | 'rejected' | 'retry' | 'error';

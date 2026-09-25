@@ -13,6 +13,15 @@ if (!url.startsWith('https://')) {
     process.exit(1);
 }
 
+// Updates are signed; installed apps accept only files signed with this key
+if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !process.env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+    console.error(
+        'Set TAURI_SIGNING_PRIVATE_KEY_PATH (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD) to sign the update.\n' +
+            'The key lives in %USERPROFILE%\\.tauri\\headhunter-sync.key; releases are normally built by GitHub Actions.',
+    );
+    process.exit(1);
+}
+
 const result = spawnSync('npx', ['tauri', 'build'], {
     stdio: 'inherit',
     shell: true,

@@ -11,7 +11,8 @@
     "tauri:dev": "tauri dev --config src-tauri/tauri.local.conf.json",
     "build:local": "tauri build --config src-tauri/tauri.local.conf.json",
     "build:prod": "node scripts/build-prod.mjs",
-    "test": "cd src-tauri && cargo test --lib"
+    "test": "cd src-tauri && cargo test --lib",
+    "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml src-tauri/Cargo.lock"
   },
   "dependencies": {
     "@lucide/vue": "^1.48.0",

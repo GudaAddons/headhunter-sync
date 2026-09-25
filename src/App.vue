@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import SignInForm from '@/components/auth/SignInForm.vue';
 import AppHeader from '@/components/layout/AppHeader.vue';
+import UpdateBanner from '@/components/layout/UpdateBanner.vue';
 import SettingsPanel from '@/components/settings/SettingsPanel.vue';
 import InstallCard from '@/components/status/InstallCard.vue';
 import RecentUploads from '@/components/status/RecentUploads.vue';
@@ -21,7 +22,12 @@ async function signOut(): Promise<void> {
     <div v-if="status" class="bg-leather flex h-full flex-col">
         <AppHeader :build="status.build" :user="status.user" />
 
-        <main class="flex-1 overflow-y-auto p-4">
+        <main class="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
+            <UpdateBanner
+                v-if="sync.update.value"
+                :update="sync.update.value"
+                :install="sync.installUpdate"
+            />
             <SignInForm
                 v-if="!status.user"
                 :api-url="status.api_url"

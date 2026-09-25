@@ -189,6 +189,15 @@ pub enum PayloadError {
     UnknownRegion,
 }
 
+/// The WoW Forever beta runs only in the US region (Americas & Oceania) until the
+/// release on 2026-11-04; Classic Era saves its region (addon 0.1.3+).
+fn default_region(client: Client) -> Option<&'static str> {
+    match client {
+        Client::Forever => Some("us"),
+        Client::Era => None,
+    }
+}
+
 /// Every character's upload with records newer than `sent(key)`; characters with
 /// nothing new are left out.
 pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<Vec<CharacterUpload>, PayloadError> {
@@ -199,6 +208,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
     };
     let region = text(&db["meta"]["region"])
         .or_else(|| ctx.region.clone())
+        .or_else(|| default_region(client).map(String::from))
         .ok_or(PayloadError::UnknownRegion)?;
 
     let deaths = own_deaths(db);
@@ -718,8 +728,12 @@ mod tests {
     }
 
     #[test]
-    fn needs_a_region() {
+    fn forever_defaults_to_the_us_region_and_era_needs_one() {
         let db = json!({ "meta": { "player": { "key": "Tess Rider" } } });
-        assert_eq!(build(&db, &ctx(Client::Forever), |_| Sent::default()), Err(PayloadError::UnknownRegion));
+        let uploads = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        assert!(uploads.iter().all(|u| u.payload.character.region == "us"));
+
+        let db = json!({ "meta": { "player": { "key": "Tess-Firemaw" } } });
+        assert_eq!(build(&db, &ctx(Client::Era), |_| Sent::default()), Err(PayloadError::UnknownRegion));
     }
 }

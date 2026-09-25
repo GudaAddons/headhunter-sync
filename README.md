@@ -25,6 +25,20 @@ Installers land in `src-tauri/target/release/bundle/` (`nsis/*.exe`, `msi/*.msi`
 
 Needs Node 20+, Rust (rustup, MSVC toolchain on Windows) and WebView2 (built into Windows 10/11).
 
+## Releasing an update
+
+Production builds check `https://github.com/GudaAddons/headhunter-sync/releases/latest/download/latest.json`
+on start and every 6 hours, and offer "Install and restart". Local builds never update.
+
+1. `npm version 0.2.0` (sets package.json, Cargo.toml and Cargo.lock, commits and tags `v0.2.0`).
+2. `git push --follow-tags`. GitHub Actions (`.github/workflows/release.yml`) builds on Windows,
+   signs the update and publishes the release with `latest.json`.
+
+Repository settings the workflow needs: variable `HEADHUNTER_API_URL` (https), secrets
+`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The key pair lives in
+`%USERPROFILE%\.tauri\headhunter-sync.key` (+ `.password`, `.pub`); the public key is in
+`tauri.conf.json`. Keep a backup of the private key: without it, installed apps can never update again.
+
 ## How it works
 
 - `src-tauri/src/installs.rs` finds the WoW folder (Blizzard registry key, common paths, or the

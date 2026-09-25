@@ -9,6 +9,7 @@ pub mod lua;
 pub mod payload;
 pub mod store;
 pub mod sync;
+pub mod updater;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -115,6 +116,16 @@ async fn recent_uploads(engine: Shared<'_>) -> Result<Vec<UploadInfo>, String> {
     engine.api().recent_uploads(&token).await
 }
 
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<updater::UpdateInfo>, String> {
+    updater::check(&app).await
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    updater::install(&app).await
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -168,15 +179,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let engine = Engine::new(data_dir);
             app.manage(Arc::clone(&engine));
             app.manage(BrowserSignIn::default());
+            app.manage(updater::Pending::default());
             build_tray(app.handle())?;
             engine.rewatch();
             engine.start_scheduler(app.handle().clone());
+            updater::start_checks(app.handle().clone());
 
             let handle = app.handle().clone();
             let listener = app.handle().clone();
@@ -208,7 +222,9 @@ pub fn run() {
             sync_now,
             get_settings,
             save_settings,
-            recent_uploads
+            recent_uploads,
+            check_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running HeadHunter Sync");
