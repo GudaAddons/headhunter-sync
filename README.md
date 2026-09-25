@@ -31,8 +31,13 @@ Production builds check `https://github.com/GudaAddons/headhunter-sync/releases/
 on start and every 6 hours, and offer "Install and restart". Local builds never update.
 
 1. `npm version 0.2.0` (sets package.json, Cargo.toml and Cargo.lock, commits and tags `v0.2.0`).
-2. `git push --follow-tags`. GitHub Actions (`.github/workflows/release.yml`) builds on Windows,
-   signs the update and publishes the release with `latest.json`.
+2. `git push --follow-tags`. GitHub Actions (`.github/workflows/release.yml`) builds on Windows
+   and macOS, signs the updates and publishes the release with `latest.json`. The files are
+   `HeadHunter-Sync_<version>_Windows-setup.exe` and `HeadHunter-Sync_<version>_macOS.dmg`
+   (universal); the update signatures are inside `latest.json`, so no `.sig` files are uploaded.
+
+The installers are not code-signed yet: Windows SmartScreen says "Unknown publisher" (More info >
+Run anyway) and macOS asks to right-click > Open the first time.
 
 The first release is the current version, so tag it directly: `git tag v0.1.0 && git push --follow-tags`.
 

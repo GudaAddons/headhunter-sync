@@ -1,6 +1,11 @@
 # A version tag (npm version 0.2.0 && git push --follow-tags) builds the production
-# app on Windows, signs the update and publishes a GitHub release with latest.json,
-# which installed apps check for updates.
+# app for Windows and macOS, signs the updates and publishes a GitHub release with
+# latest.json, which installed apps check for updates.
+#
+# Release files carry the system in their names:
+#   HeadHunter-Sync_<version>_Windows-setup.exe
+#   HeadHunter-Sync_<version>_macOS.dmg (universal: Apple Silicon and Intel)
+# The update signatures live inside latest.json, so the .sig files are not uploaded.
 #
 # "Run workflow" (workflow_dispatch) is a dry run: the same build and signing, but only a
 # draft release tagged dry-run-v<version>. Installed apps never see drafts. Without the
@@ -22,7 +27,19 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            system: Windows
+            args: --bundles nsis
+            rust_targets: ''
+          - runner: macos-latest
+            system: macOS
+            args: --target universal-apple-darwin --bundles app,dmg
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
       API_URL: ${{ vars.HEADHUNTER_API_URL || (github.event_name == 'workflow_dispatch' && 'https://dry-run.invalid' || '') }}
@@ -65,6 +82,8 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -72,7 +91,7 @@ jobs:
 
       - run: npm ci
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEADHUNTER_BUILD: prod
@@ -80,8 +99,16 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          args: ${{ matrix.args }}
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: HeadHunter Sync ${{ steps.tag.outputs.name }}
-          releaseBody: Download the setup file below. Installed apps offer this update on their own.
+          releaseBody: |
+            Download the file for your system:
+            - **Windows:** `HeadHunter-Sync_..._Windows-setup.exe`
+            - **macOS:** `HeadHunter-Sync_..._macOS.dmg` (Apple Silicon and Intel). The first time, right-click the app and choose Open, as it is not signed by Apple yet.
+
+            Installed apps offer this update on their own.
           releaseDraft: ${{ env.DRY_RUN == 'true' }}
-          includeUpdaterJson: true
+          releaseAssetNamePattern: HeadHunter-Sync_[version]_${{ matrix.system }}[setup][ext]
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: false
