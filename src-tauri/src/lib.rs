@@ -111,6 +111,19 @@ fn save_settings(app: AppHandle, engine: Shared<'_>, settings: Settings) -> Resu
     engine.save_settings(settings)
 }
 
+/// "Start with Windows" is on by default: a fresh install registers it on the first run.
+/// Only the production build, so local and dev builds never start with the system.
+fn apply_start_with_system(app: &AppHandle, engine: &Engine) {
+    if !config::is_production() {
+        return;
+    }
+    let autostart = app.autolaunch();
+    let wanted = engine.settings().start_with_system;
+    if autostart.is_enabled().unwrap_or(!wanted) != wanted {
+        let _ = if wanted { autostart.enable() } else { autostart.disable() };
+    }
+}
+
 #[tauri::command]
 async fn recent_uploads(engine: Shared<'_>) -> Result<Vec<UploadInfo>, String> {
     let token = store::token().ok_or("Sign in first.")?;
@@ -189,6 +202,7 @@ pub fn run() {
             app.manage(BrowserSignIn::default());
             app.manage(updater::Pending::default());
             build_tray(app.handle())?;
+            apply_start_with_system(app.handle(), &engine);
             engine.rewatch();
             engine.start_scheduler(app.handle().clone());
             updater::start_checks(app.handle().clone());

@@ -37,7 +37,7 @@ impl Default for Settings {
             sync_on_change: true,
             sync_on_start: true,
             interval_minutes: 60,
-            start_with_system: false,
+            start_with_system: true,
             user_name: None,
             email: None,
         }
