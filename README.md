@@ -54,16 +54,19 @@ Repository settings the workflow needs: variable `HEADHUNTER_API_URL` (https), s
 `%USERPROFILE%\.tauri\headhunter-sync.key` (+ `.password`, `.pub`); the public key is in
 `tauri.conf.json`. Keep a backup of the private key: without it, installed apps can never update again.
 
+## Author
+
+Salikh Gurgenidze ([Vati](https://github.com/vatichild)), author and maintainer.
+
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
+The Windows installers will be signed with a Certum Open Source Code Signing certificate issued
+to Salikh Gurgenidze (the certificate is being issued). Until then they are not code-signed, and
+Windows may say "Windows protected your PC" the first time (More info > Run anyway).
 
-- Committers and reviewers: [Vati](https://github.com/vatichild)
-- Approvers: [Vati](https://github.com/vatichild)
-
-Only the installers built by this repository's GitHub Actions release workflow, from a
-version tag, are signed. Each signing request is approved by an approver.
+- Only installers built from this repository by its release workflow, from a version tag, are signed.
+- Only Salikh Gurgenidze signs releases.
+- The app updates are signed separately with the update key (see "Releasing an update").
 
 ## Privacy policy
 
