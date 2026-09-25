@@ -37,12 +37,21 @@ export type AccountStatus = {
     error: string | null;
 };
 
+export type DownloadResult = {
+    at: number;
+    outcome: 'updated' | 'unchanged' | 'retry' | 'error';
+    message: string | null;
+    written_at: number | null;
+    wanted: number;
+};
+
 export type InstallStatus = {
     path: string;
     client: Client;
     addon_version: string | null;
     settings: InstallSettings;
     accounts: AccountStatus[];
+    download: DownloadResult | null;
 };
 
 export type Status = {

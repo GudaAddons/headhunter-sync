@@ -201,22 +201,9 @@ fn default_region(client: Client) -> Option<&'static str> {
 /// Every character's upload with records newer than `sent(key)`; characters with
 /// nothing new are left out.
 pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<Vec<CharacterUpload>, PayloadError> {
-    let client = match text(&db["meta"]["client"]).as_deref() {
-        Some("era") => Client::Era,
-        Some("forever") => Client::Forever,
-        _ => ctx.client,
-    };
-    let region = text(&db["meta"]["region"])
-        .or_else(|| ctx.region.clone())
-        .or_else(|| default_region(client).map(String::from))
-        .ok_or(PayloadError::UnknownRegion)?;
-
+    let (client, region) = client_and_region(db, ctx)?;
     let deaths = own_deaths(db);
-    let last_player = text(&db["meta"]["player"]["key"])
-        .or_else(|| deaths.iter().max_by_key(|d| int(&d["t"])).and_then(|d| text(&d["victim"]["key"])));
-
-    let mut keys: BTreeSet<String> = deaths.iter().filter_map(|d| text(&d["victim"]["key"])).collect();
-    keys.extend(last_player.clone());
+    let (keys, last_player) = character_keys(db, &deaths);
 
     let mut uploads = Vec::new();
     for key in keys {
@@ -259,9 +246,12 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         after.duels = max_t(&duels_src, already.duels);
 
         let events_src = newest_first_limited(
-            values(&db["marks"]["events"]).filter(|e| match text(&e["hunter"]) {
-                Some(hunter) => hunter == key,
-                None => is_last,
+            values(&db["marks"]["events"]).filter(|e| {
+                !from_website(e)
+                    && match text(&e["hunter"]) {
+                        Some(hunter) => hunter == key,
+                        None => is_last,
+                    }
             }),
             already.bounty,
             MAX_BOUNTY_EVENTS,
@@ -298,6 +288,52 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
     Ok(uploads)
 }
 
+/// The world key of every character in the file, as the website's download takes it:
+/// "era|eu|Firemaw" or "forever|us|pvp".
+pub fn world_keys(db: &Value, ctx: &Context) -> Result<BTreeSet<String>, PayloadError> {
+    let (client, region) = client_and_region(db, ctx)?;
+    let deaths = own_deaths(db);
+    let (keys, last_player) = character_keys(db, &deaths);
+    Ok(keys
+        .iter()
+        .filter_map(|key| {
+            let is_last = last_player.as_deref() == Some(key.as_str());
+            let character = character(db, key, is_last, client, &region, ctx, &deaths);
+            let place = character.realm.or(character.realm_type)?;
+            Some(format!("{}|{}|{}", client_name(client), region, place))
+        })
+        .collect())
+}
+
+fn client_name(client: Client) -> &'static str {
+    match client {
+        Client::Era => "era",
+        Client::Forever => "forever",
+    }
+}
+
+fn client_and_region(db: &Value, ctx: &Context) -> Result<(Client, String), PayloadError> {
+    let client = match text(&db["meta"]["client"]).as_deref() {
+        Some("era") => Client::Era,
+        Some("forever") => Client::Forever,
+        _ => ctx.client,
+    };
+    let region = text(&db["meta"]["region"])
+        .or_else(|| ctx.region.clone())
+        .or_else(|| default_region(client).map(String::from))
+        .ok_or(PayloadError::UnknownRegion)?;
+    Ok((client, region))
+}
+
+/// Every character with own deaths, plus the one played last (and which one that is).
+fn character_keys(db: &Value, deaths: &[&Value]) -> (BTreeSet<String>, Option<String>) {
+    let last_player = text(&db["meta"]["player"]["key"])
+        .or_else(|| deaths.iter().max_by_key(|d| int(&d["t"])).and_then(|d| text(&d["victim"]["key"])));
+    let mut keys: BTreeSet<String> = deaths.iter().filter_map(|d| text(&d["victim"]["key"])).collect();
+    keys.extend(last_player.clone());
+    (keys, last_player)
+}
+
 fn character(db: &Value, key: &str, is_last: bool, client: Client, region: &str, ctx: &Context, deaths: &[&Value]) -> Character {
     let (name, realm) = split_key(key, client);
     let snapshot = if is_last {
@@ -332,11 +368,21 @@ fn character(db: &Value, key: &str, is_last: bool, client: Client, region: &str,
     }
 }
 
-/// The account's own deaths (the `deaths` list), without demo or simulated ones.
+/// The account's own deaths (the `deaths` list), without demo or simulated ones and
+/// without those the website sent back.
 fn own_deaths(db: &Value) -> Vec<&Value> {
     values(&db["deaths"])
-        .filter(|d| !flag(&d["demo"]) && matches!(text(&d["confidence"]).as_deref(), Some("exact") | Some("inferred")))
+        .filter(|d| {
+            !flag(&d["demo"])
+                && !from_website(d)
+                && matches!(text(&d["confidence"]).as_deref(), Some("exact") | Some("inferred"))
+        })
         .collect()
+}
+
+/// Records the HeadHunter_Data addon brought back; the website has them already.
+fn from_website(record: &Value) -> bool {
+    text(&record["origin"]).as_deref() == Some("website")
 }
 
 fn death(d: &Value, client: Client) -> Option<Death> {
@@ -689,6 +735,33 @@ mod tests {
         assert_eq!(later[0].payload.deaths.len(), 1);
         assert_eq!(later[0].payload.deaths[0].t, 900);
         assert!(later[0].payload.zones.is_empty(), "zones already sent");
+    }
+
+    #[test]
+    fn world_keys_name_every_character_world() {
+        let era = world_keys(&era_db(), &ctx(Client::Era)).unwrap();
+        assert_eq!(era.into_iter().collect::<Vec<_>>(), vec!["era|eu|Firemaw".to_string()], "both characters live on Firemaw");
+
+        let forever = json!({ "meta": { "client": "forever", "player": { "key": "Tess Rider" } } });
+        let context = Context { realm_type: "hardcore".into(), ..ctx(Client::Forever) };
+        let keys = world_keys(&forever, &context).unwrap();
+        assert_eq!(keys.into_iter().collect::<Vec<_>>(), vec!["forever|us|hardcore".to_string()], "Forever takes the install's realm type");
+    }
+
+    #[test]
+    fn never_sends_back_what_the_website_sent() {
+        let mut db = era_db();
+        db["deaths"].as_array_mut().unwrap().push(json!(
+            { "id": "Tessa-Firemaw:500", "t": 500, "origin": "website", "victim": { "key": "Tessa-Firemaw", "level": 42 },
+              "killer": { "key": "Brute-Firemaw", "level": 50 }, "confidence": "exact", "classification": "fair" }
+        ));
+        db["marks"]["events"].as_array_mut().unwrap().push(json!(
+            { "t": 510, "delta": 5, "reason": "catch", "outlaw": "Brute", "total": 11, "hunter": "Tessa-Firemaw", "origin": "website" }
+        ));
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let tessa = by_key(&uploads, "Tessa-Firemaw");
+        assert!(tessa.payload.deaths.iter().all(|d| d.t != 500), "a death from the website is not uploaded again");
+        assert!(tessa.payload.bounty_events.iter().all(|e| e.t != 510), "a bounty event from the website is not uploaded again");
     }
 
     #[test]

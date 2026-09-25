@@ -240,6 +240,96 @@ fn key_text(key: &Value) -> String {
     }
 }
 
+/// `Name = <value>` as Lua source, for the data file the game loads as addon code.
+/// Arrays become sequences, objects keyed tables (sorted keys, so the same data gives
+/// the same text); null object fields are left out.
+pub fn write_variable(name: &str, value: &Value) -> String {
+    let mut out = format!("{name} = ");
+    write_value(value, 0, &mut out);
+    out.push('\n');
+    out
+}
+
+fn write_value(value: &Value, depth: usize, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("nil"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => out.push_str(&n.to_string()),
+        Value::String(s) => write_string(s, out),
+        Value::Array(list) => {
+            if list.is_empty() {
+                out.push_str("{}");
+                return;
+            }
+            out.push_str("{\n");
+            for item in list {
+                indent(depth + 1, out);
+                write_value(item, depth + 1, out);
+                out.push_str(",\n");
+            }
+            indent(depth, out);
+            out.push('}');
+        }
+        Value::Object(map) => {
+            let fields: Vec<(&String, &Value)> = map.iter().filter(|(_, v)| !v.is_null()).collect();
+            if fields.is_empty() {
+                out.push_str("{}");
+                return;
+            }
+            out.push_str("{\n");
+            for (key, item) in fields {
+                indent(depth + 1, out);
+                if is_identifier(key) {
+                    out.push_str(key);
+                } else {
+                    out.push('[');
+                    write_string(key, out);
+                    out.push(']');
+                }
+                out.push_str(" = ");
+                write_value(item, depth + 1, out);
+                out.push_str(",\n");
+            }
+            indent(depth, out);
+            out.push('}');
+        }
+    }
+}
+
+fn write_string(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 32 || c as u32 == 127 => out.push_str(&format!("\\{:03}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+const LUA_KEYWORDS: [&str; 22] = [
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil", "not",
+    "or", "repeat", "return", "then", "true", "until", "while",
+];
+
+fn is_identifier(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !LUA_KEYWORDS.contains(&key)
+}
+
+fn indent(depth: usize, out: &mut String) {
+    for _ in 0..depth {
+        out.push_str("  ");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +356,31 @@ mod tests {
         assert_eq!(db["level"], json!(-1));
         assert_eq!(db["gone"], json!(null));
         assert_eq!(db["plain"], json!(false));
+    }
+
+    #[test]
+    fn writes_lua_that_reads_back_the_same() {
+        let data = json!({
+            "worlds": { "era|eu|Firemaw": { "wanted": [{ "name": "Dusk Blade", "kills": 12.5, "badges": ["coward"] }] } },
+            "characters": [{ "name": "Say \"hi\"\\\n\ttab", "level": -1, "dead": true, "gone": null }],
+            "end": "a keyword key",
+            "empty": [],
+            "none": {},
+        });
+        let source = write_variable("HeadHunter_SiteData", &data);
+        let mut expected = data.clone();
+        expected["characters"][0].as_object_mut().unwrap().remove("gone");
+        expected["none"] = json!([]);
+        assert_eq!(read_variable(&source, "HeadHunter_SiteData").unwrap(), expected, "round trip through the reader");
+        assert!(source.contains("[\"end\"] ="), "a Lua keyword is written as a string key");
+        assert!(source.contains("[\"era|eu|Firemaw\"] ="), "a key that is not a name is written as a string key");
+    }
+
+    #[test]
+    fn writes_the_same_text_for_the_same_data() {
+        let a = json!({ "b": 1, "a": [1, 2], "c": { "y": 2, "x": 1 } });
+        let b = json!({ "c": { "x": 1, "y": 2 }, "a": [1, 2], "b": 1 });
+        assert_eq!(write_variable("V", &a), write_variable("V", &b), "keys are sorted");
     }
 
     #[test]

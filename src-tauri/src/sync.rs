@@ -13,11 +13,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::api::{Api, UploadOutcome, User};
+use crate::api::{Api, DownloadOutcome, UploadOutcome, User};
 use crate::installs::{self, Install};
 use crate::payload::{self, Client, Context};
-use crate::store::{self, InstallSettings, Settings, State, SyncResult};
-use crate::{config, lua};
+use crate::store::{self, DownloadResult, InstallSettings, Settings, State, SyncResult};
+use crate::{config, download, lua};
 
 /// Waits after a change so the game has finished writing the file.
 const SETTLE: Duration = Duration::from_secs(5);
@@ -65,6 +65,8 @@ pub struct InstallStatus {
     pub addon_version: Option<String>,
     pub settings: InstallSettings,
     pub accounts: Vec<AccountStatus>,
+    /// The last download of the website's data into this game.
+    pub download: Option<DownloadResult>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -183,6 +185,7 @@ impl Engine {
                     .collect();
                 InstallStatus {
                     settings: self.install_settings(&install),
+                    download: state.downloads.get(&path).cloned(),
                     path,
                     client: install.client,
                     addon_version: install.addon_version.clone(),
@@ -255,6 +258,7 @@ impl Engine {
                 continue;
             }
             let path = install.path.to_string_lossy().to_string();
+            let mut worlds = std::collections::BTreeSet::new();
             for account in &install.accounts {
                 let db = match read_db(&account.saved_file) {
                     Ok(db) => db,
@@ -269,6 +273,7 @@ impl Engine {
                     realm_type: install_settings.realm_type.clone(),
                     addon_version: install.addon_version.clone().unwrap_or_else(|| "unknown".into()),
                 };
+                worlds.extend(payload::world_keys(&db, &context).unwrap_or_default());
                 let sent = self.state.lock().unwrap().sent.clone();
                 let uploads = match payload::build(&db, &context, |key| {
                     sent.get(&store::state_key(&path, &account.name, key)).cloned().unwrap_or_default()
@@ -321,11 +326,76 @@ impl Engine {
                     }
                 }
             }
+
+            if install.addon_version.is_some() && !worlds.is_empty() {
+                let worlds: Vec<String> = worlds.into_iter().collect();
+                match self.download(&token, &install, &path, &worlds).await {
+                    Err(DownloadStop::SignedOut) => {
+                        self.signed_out();
+                        notify(app, "Signed out", "HeadHunter Sync was signed out on the website. Sign in again to keep syncing.");
+                        return Err(Retry("Signed out on the website. Sign in again.".into()));
+                    }
+                    Err(DownloadStop::Retry(m)) => {
+                        retry.get_or_insert(m);
+                    }
+                    Ok(()) => {}
+                }
+                let _ = app.emit("status-changed", ());
+            }
         }
         match retry {
             Some(message) => Err(Retry(message)),
             None => Ok(()),
         }
+    }
+
+    /// Fetches the website's data for these worlds and writes it into the game
+    /// (download.rs). The ETag is only sent while the data file is still there.
+    async fn download(&self, token: &str, install: &Install, path: &str, worlds: &[String]) -> Result<(), DownloadStop> {
+        let previous = self.state.lock().unwrap().downloads.get(path).cloned();
+        let etag = previous.as_ref().and_then(|p| p.etag.clone()).filter(|_| download::written(&install.path));
+        let mut result = DownloadResult {
+            at: now(),
+            outcome: "unchanged".into(),
+            message: None,
+            written_at: previous.as_ref().and_then(|p| p.written_at),
+            wanted: previous.as_ref().map_or(0, |p| p.wanted),
+            etag: etag.clone(),
+        };
+        let stop = match self.api.download(token, worlds, etag.as_deref()).await {
+            DownloadOutcome::Fresh(data, etag) => {
+                match download::write(&install.path, &data) {
+                    Ok(changed) => {
+                        result.outcome = if changed { "updated" } else { "unchanged" }.into();
+                        if changed || result.written_at.is_none() {
+                            result.written_at = Some(now());
+                        }
+                        result.wanted = download::wanted_count(&data);
+                        result.etag = etag;
+                    }
+                    Err(e) => {
+                        result.outcome = "error".into();
+                        result.message = Some(e);
+                        result.etag = None;
+                    }
+                }
+                None
+            }
+            DownloadOutcome::Unchanged => None,
+            DownloadOutcome::SignedOut => {
+                result.outcome = "error".into();
+                result.message = Some("Signed out on the website. Sign in again.".into());
+                Some(DownloadStop::SignedOut)
+            }
+            DownloadOutcome::Retry(m) => {
+                result.outcome = "retry".into();
+                result.message = Some(m.clone());
+                Some(DownloadStop::Retry(m))
+            }
+        };
+        self.state.lock().unwrap().downloads.insert(path.to_string(), result);
+        self.save_state();
+        stop.map_or(Ok(()), Err)
     }
 
     // --------------------------------------------------------------- schedule
@@ -405,6 +475,11 @@ impl Engine {
 }
 
 struct Retry(String);
+
+enum DownloadStop {
+    SignedOut,
+    Retry(String),
+}
 
 fn read_db(path: &std::path::Path) -> Result<serde_json::Value, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;

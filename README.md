@@ -58,7 +58,10 @@ Repository settings the workflow needs: variable `HEADHUNTER_API_URL` (https), s
 - `api.rs` signs in (one token per PC, kept in the Windows Credential Manager) and uploads;
   `sync.rs` runs the schedule, retries when offline and remembers what was sent (`state.json`
   in the app's data folder).
+- `download.rs` brings the website's WANTED and Duels lists and your own records back: after each
+  sync it writes `Interface\AddOns\HeadHunter_Data\` (a `.toc` and `Data.lua`), a small addon the
+  game loads at the next login, so WoW Forever gets its data back too.
 - The window (Vue 3 + shadcn-vue, in the website's look) shows sign in, status and settings.
 
-The app only reads the HeadHunter saved file and talks to the HeadHunter website. Nothing else on
-the PC is touched.
+The app only reads the HeadHunter saved file, writes the `HeadHunter_Data` addon folder and talks to
+the HeadHunter website. Nothing else on the PC is touched.

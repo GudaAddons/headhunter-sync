@@ -93,18 +93,29 @@ fn accounts(game: &Path) -> Vec<Account> {
     accounts
 }
 
-fn addon_version(game: &Path) -> Option<String> {
-    let toc = ["AddOns", "Addons"]
+/// The game's AddOns folder that holds HeadHunter (the folder is spelled both ways).
+pub fn addons_dir(game: &Path) -> Option<PathBuf> {
+    ["AddOns", "Addons"]
         .iter()
-        .map(|dir| game.join("Interface").join(dir).join("HeadHunter").join("HeadHunter.toc"))
-        .find(|p| p.is_file())?;
-    version_from_toc(&fs::read_to_string(toc).ok()?)
+        .map(|dir| game.join("Interface").join(dir))
+        .find(|dir| dir.join("HeadHunter").join("HeadHunter.toc").is_file())
+}
+
+pub fn addon_toc(game: &Path) -> Option<String> {
+    fs::read_to_string(addons_dir(game)?.join("HeadHunter").join("HeadHunter.toc")).ok()
+}
+
+fn addon_version(game: &Path) -> Option<String> {
+    version_from_toc(&addon_toc(game)?)
 }
 
 pub fn version_from_toc(toc: &str) -> Option<String> {
-    toc.lines()
-        .find_map(|line| line.trim().strip_prefix("## Version:"))
-        .map(|v| v.trim().chars().take(16).collect())
+    toc_field(toc, "Version").map(|v| v.chars().take(16).collect())
+}
+
+pub fn toc_field(toc: &str, field: &str) -> Option<String> {
+    let prefix = format!("## {field}:");
+    toc.lines().find_map(|line| line.trim().strip_prefix(prefix.as_str())).map(|v| v.trim().to_string())
 }
 
 fn normalize(path: &Path) -> String {

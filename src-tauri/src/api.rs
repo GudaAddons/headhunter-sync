@@ -30,6 +30,18 @@ pub enum UploadOutcome {
     Retry(String),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum DownloadOutcome {
+    /// 200: the data and its ETag.
+    Fresh(Value, Option<String>),
+    /// 304: nothing changed since the ETag sent.
+    Unchanged,
+    /// 401: the token was signed out on the website.
+    SignedOut,
+    /// Offline, rate limited or a server error: try again later.
+    Retry(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UploadInfo {
     pub id: i64,
@@ -118,6 +130,37 @@ impl Api {
             422 => UploadOutcome::Rejected(first_error(&body).unwrap_or_else(|| "The website refused the data.".into())),
             429 => UploadOutcome::Retry("The website asks to slow down; trying again soon.".into()),
             _ => UploadOutcome::Retry(format!("The website answered {status}; trying again soon.")),
+        }
+    }
+
+    /// The WANTED and Duels lists of these worlds and the account's own records there,
+    /// for the HeadHunter_Data addon. `etag` from the last answer gives `Unchanged`.
+    pub async fn download(&self, token: &str, worlds: &[String], etag: Option<&str>) -> DownloadOutcome {
+        let query: Vec<(&str, &str)> = worlds.iter().map(|w| ("worlds[]", w.as_str())).collect();
+        let mut request = self
+            .http
+            .get(config::api("sync/download"))
+            .query(&query)
+            .bearer_auth(token)
+            .header("Accept", "application/json");
+        if let Some(etag) = etag {
+            request = request.header("If-None-Match", etag);
+        }
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(e) => return DownloadOutcome::Retry(offline_message(&e)),
+        };
+        let status = response.status().as_u16();
+        let etag = response.headers().get("ETag").and_then(|v| v.to_str().ok()).map(String::from);
+        match status {
+            200 => match response.json::<Value>().await {
+                Ok(body) => DownloadOutcome::Fresh(body, etag),
+                Err(_) => DownloadOutcome::Retry("The website sent game data that could not be read.".into()),
+            },
+            304 => DownloadOutcome::Unchanged,
+            401 | 403 => DownloadOutcome::SignedOut,
+            429 => DownloadOutcome::Retry("The website asks to slow down; trying again soon.".into()),
+            _ => DownloadOutcome::Retry(format!("The website answered {status} for the game data; trying again soon.")),
         }
     }
 

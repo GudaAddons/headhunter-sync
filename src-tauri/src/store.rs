@@ -68,6 +68,21 @@ pub struct State {
     /// Same key -> the last result.
     pub results: BTreeMap<String, SyncResult>,
     pub last_run: Option<i64>,
+    /// Install folder -> the last download of the website's data into the game.
+    pub downloads: BTreeMap<String, DownloadResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DownloadResult {
+    pub at: i64,
+    /// updated, unchanged, retry, error
+    pub outcome: String,
+    pub message: Option<String>,
+    /// When the data in the game was last written.
+    pub written_at: Option<i64>,
+    pub wanted: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -4,6 +4,7 @@
 pub mod api;
 pub mod browser_auth;
 pub mod config;
+pub mod download;
 pub mod installs;
 pub mod lua;
 pub mod payload;

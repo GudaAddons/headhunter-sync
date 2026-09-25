@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { FolderIcon } from '@lucide/vue';
 import CharacterRow from '@/components/status/CharacterRow.vue';
+import GameDataLine from '@/components/status/GameDataLine.vue';
 import { Badge } from '@/components/ui/badge';
 import { CLIENT_LABELS, folderName } from '@/lib/format';
 import type { InstallStatus } from '@/types';
@@ -38,6 +39,8 @@ defineProps<{
                 Off
             </Badge>
         </header>
+
+        <GameDataLine v-if="install.download" :download="install.download" />
 
         <p
             v-if="!install.accounts.length"
