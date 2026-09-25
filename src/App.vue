@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import SignInForm from '@/components/auth/SignInForm.vue';
+import AppFooter from '@/components/layout/AppFooter.vue';
 import AppHeader from '@/components/layout/AppHeader.vue';
 import UpdateBanner from '@/components/layout/UpdateBanner.vue';
 import SettingsPanel from '@/components/settings/SettingsPanel.vue';
@@ -20,7 +21,11 @@ async function signOut(): Promise<void> {
 
 <template>
     <div v-if="status" class="bg-leather flex h-full flex-col">
-        <AppHeader :build="status.build" :user="status.user" />
+        <AppHeader
+            :build="status.build"
+            :user="status.user"
+            @sign-out="signOut"
+        />
 
         <main class="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
             <UpdateBanner
@@ -66,14 +71,11 @@ async function signOut(): Promise<void> {
                         :load="sync.getSettings"
                         :save="sync.saveSettings"
                         @saved="sync.refresh"
-                        @sign-out="signOut"
                     />
                 </TabsContent>
             </Tabs>
         </main>
 
-        <footer class="px-4 py-2 text-center text-[0.7rem] text-muted-foreground/70">
-            HeadHunter Sync {{ status.version }} · {{ status.api_url }}
-        </footer>
+        <AppFooter :version="status.version" :api-url="status.api_url" />
     </div>
 </template>

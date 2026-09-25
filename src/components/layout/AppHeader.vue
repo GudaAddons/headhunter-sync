@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { CrosshairIcon } from '@lucide/vue';
+import { CrosshairIcon, LogOutIcon } from '@lucide/vue';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import type { User } from '@/types';
 
 defineProps<{
     build: string;
     user: User | null;
+}>();
+
+const emit = defineEmits<{
+    signOut: [];
 }>();
 </script>
 
@@ -35,8 +40,20 @@ defineProps<{
         >
             {{ build }}
         </Badge>
-        <span v-if="user" class="ml-auto truncate text-sm text-stone-300">
-            {{ user.name }}
-        </span>
+        <div v-if="user" class="ml-auto flex min-w-0 items-center gap-1">
+            <span class="truncate text-sm text-stone-300">
+                {{ user.name }}
+            </span>
+            <Button
+                variant="ghost"
+                size="sm"
+                class="text-stone-300 hover:text-gold"
+                title="Sign out"
+                @click="emit('signOut')"
+            >
+                <LogOutIcon />
+                Sign out
+            </Button>
+        </div>
     </header>
 </template>

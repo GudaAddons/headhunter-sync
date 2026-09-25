@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CircleCheckIcon, LogOutIcon } from '@lucide/vue';
+import { CircleCheckIcon } from '@lucide/vue';
 import { onMounted, ref } from 'vue';
 import InstallOptions from '@/components/settings/InstallOptions.vue';
 import SyncTiming from '@/components/settings/SyncTiming.vue';
@@ -16,7 +16,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     saved: [];
-    signOut: [];
 }>();
 
 const settings = ref<Settings | null>(null);
@@ -93,10 +92,6 @@ async function submit(): Promise<void> {
                 <CircleCheckIcon class="size-4" />
                 Saved
             </span>
-            <Button variant="ghost" class="ml-auto" @click="emit('signOut')">
-                <LogOutIcon />
-                Sign out
-            </Button>
         </div>
     </section>
 </template>
