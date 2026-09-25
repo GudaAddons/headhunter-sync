@@ -166,7 +166,12 @@ impl Engine {
                     .iter()
                     .map(|account| {
                         let (characters, error) = match read_db(&account.saved_file) {
-                            Ok(db) => (payload::characters_in(&db), None),
+                            Ok(db) => (
+                                payload::characters_in(&db),
+                                payload::world_keys(&db, &context(&install, &self.install_settings(&install)))
+                                    .err()
+                                    .map(|e| e.to_string()),
+                            ),
                             Err(e) => (Default::default(), Some(e)),
                         };
                         AccountStatus {
@@ -267,22 +272,15 @@ impl Engine {
                         continue;
                     }
                 };
-                let context = Context {
-                    client: install.client,
-                    region: install_settings.region.clone(),
-                    realm_type: install_settings.realm_type.clone(),
-                    addon_version: install.addon_version.clone().unwrap_or_else(|| "unknown".into()),
-                };
+                let context = context(&install, &install_settings);
                 worlds.extend(payload::world_keys(&db, &context).unwrap_or_default());
                 let sent = self.state.lock().unwrap().sent.clone();
-                let uploads = match payload::build(&db, &context, |key| {
+                // An unknown region needs the player (a login or a setting), not a retry;
+                // the account shows why on the status screen.
+                let Ok(uploads) = payload::build(&db, &context, |key| {
                     sent.get(&store::state_key(&path, &account.name, key)).cloned().unwrap_or_default()
-                }) {
-                    Ok(uploads) => uploads,
-                    Err(e) => {
-                        retry.get_or_insert(e.to_string());
-                        continue;
-                    }
+                }) else {
+                    continue;
                 };
 
                 for upload in uploads {
@@ -479,6 +477,17 @@ struct Retry(String);
 enum DownloadStop {
     SignedOut,
     Retry(String),
+}
+
+/// What the saved file cannot say: the region comes from the setting, else from the
+/// game's own config (`SET portal`); the addon's saved region still wins over both.
+fn context(install: &Install, settings: &InstallSettings) -> Context {
+    Context {
+        client: install.client,
+        region: settings.region.clone().or_else(|| install.portal_region.clone()),
+        realm_type: settings.realm_type.clone(),
+        addon_version: install.addon_version.clone().unwrap_or_else(|| "unknown".into()),
+    }
 }
 
 fn read_db(path: &std::path::Path) -> Result<serde_json::Value, String> {

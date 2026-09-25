@@ -19,6 +19,8 @@ pub struct Install {
     pub client: Client,
     /// `## Version` of the installed addon, when it is installed.
     pub addon_version: Option<String>,
+    /// The region the game client uses (`SET portal` in `WTF\Config.wtf`), when it says.
+    pub portal_region: Option<String>,
     pub accounts: Vec<Account>,
 }
 
@@ -69,6 +71,9 @@ pub fn find(picked: &[PathBuf]) -> Vec<Install> {
         for (path, client) in games {
             installs.push(Install {
                 addon_version: addon_version(&path),
+                portal_region: fs::read_to_string(path.join("WTF").join("Config.wtf"))
+                    .ok()
+                    .and_then(|config| portal_region(&config)),
                 accounts: accounts(&path),
                 path,
                 client,
@@ -111,6 +116,13 @@ fn addon_version(game: &Path) -> Option<String> {
 
 pub fn version_from_toc(toc: &str) -> Option<String> {
     toc_field(toc, "Version").map(|v| v.chars().take(16).collect())
+}
+
+/// `SET portal "EU"` in Config.wtf as the website's region; test and PTR portals say nothing.
+pub fn portal_region(config: &str) -> Option<String> {
+    let portal = config.lines().find_map(|line| line.trim().strip_prefix("SET portal "))?;
+    let region = portal.trim().trim_matches('"').to_ascii_lowercase();
+    matches!(region.as_str(), "us" | "eu" | "kr" | "tw" | "cn").then_some(region)
 }
 
 pub fn toc_field(toc: &str, field: &str) -> Option<String> {
@@ -176,5 +188,13 @@ mod tests {
         assert_eq!(era_install.accounts[0].name, "11111#1");
         assert!(installs.iter().any(|i| i.client == Client::Forever && i.accounts.is_empty()));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_the_region_from_the_game_config() {
+        assert_eq!(portal_region("SET locale \"enGB\"\r\nSET portal \"EU\"\r\n").as_deref(), Some("eu"));
+        assert_eq!(portal_region("SET portal \"US\"").as_deref(), Some("us"));
+        assert_eq!(portal_region("SET portal \"test\""), None, "the beta and PTR portals name no region");
+        assert_eq!(portal_region("SET locale \"enUS\""), None);
     }
 }

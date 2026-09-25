@@ -185,7 +185,7 @@ pub struct CharacterUpload {
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum PayloadError {
-    #[error("the saved data does not say which region it is from; pick it in Settings")]
+    #[error("Region unknown: log in to the game once with the addon, or pick the region in Settings")]
     UnknownRegion,
 }
 
