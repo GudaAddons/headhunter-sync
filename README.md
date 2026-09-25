@@ -34,6 +34,16 @@ on start and every 6 hours, and offer "Install and restart". Local builds never 
 2. `git push --follow-tags`. GitHub Actions (`.github/workflows/release.yml`) builds on Windows,
    signs the update and publishes the release with `latest.json`.
 
+The first release is the current version, so tag it directly: `git tag v0.1.0 && git push --follow-tags`.
+
+Dry run: Actions > Release > "Run workflow" builds and signs the same way but makes only a draft
+release `dry-run-v<version>` (against `https://dry-run.invalid` while the variable is unset).
+Installed apps never see drafts. Delete the draft and its tag after checking the files.
+
+The website's download button (`HEADHUNTER_APP_WINDOWS_URL`) points to
+`https://github.com/GudaAddons/headhunter-sync/releases/latest`; file names carry the version,
+so a direct file link would break with each release.
+
 Repository settings the workflow needs: variable `HEADHUNTER_API_URL` (https), secrets
 `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The key pair lives in
 `%USERPROFILE%\.tauri\headhunter-sync.key` (+ `.password`, `.pub`); the public key is in

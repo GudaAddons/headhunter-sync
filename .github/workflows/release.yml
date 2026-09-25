@@ -2,6 +2,10 @@
 # app on Windows, signs the update and publishes a GitHub release with latest.json,
 # which installed apps check for updates.
 #
+# "Run workflow" (workflow_dispatch) is a dry run: the same build and signing, but only a
+# draft release tagged dry-run-v<version>. Installed apps never see drafts. Without the
+# HEADHUNTER_API_URL variable it builds against https://dry-run.invalid. Delete the draft after.
+#
 # Repository settings:
 #   Variables: HEADHUNTER_API_URL   the website's https:// address
 #   Secrets:   TAURI_SIGNING_PRIVATE_KEY           contents of headhunter-sync.key
@@ -11,6 +15,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,10 +23,14 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+      API_URL: ${{ vars.HEADHUNTER_API_URL || (github.event_name == 'workflow_dispatch' && 'https://dry-run.invalid' || '') }}
     steps:
       - uses: actions/checkout@v5
 
       - name: Check the tag matches the app version
+        if: env.DRY_RUN != 'true'
         shell: bash
         run: |
           version=$(node -p "require('./package.json').version")
@@ -33,12 +42,22 @@ jobs:
       - name: Check the website address is set
         shell: bash
         env:
-          HEADHUNTER_API_URL: ${{ vars.HEADHUNTER_API_URL }}
+          HEADHUNTER_API_URL: ${{ env.API_URL }}
         run: |
           case "$HEADHUNTER_API_URL" in
             https://*) ;;
             *) echo "Set the HEADHUNTER_API_URL repository variable to the website's https:// address"; exit 1 ;;
           esac
+
+      - name: Release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "name=dry-run-v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-node@v5
         with:
@@ -57,12 +76,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEADHUNTER_BUILD: prod
-          HEADHUNTER_API_URL: ${{ vars.HEADHUNTER_API_URL }}
+          HEADHUNTER_API_URL: ${{ env.API_URL }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: HeadHunter Sync ${{ github.ref_name }}
+          tagName: ${{ steps.tag.outputs.name }}
+          releaseName: HeadHunter Sync ${{ steps.tag.outputs.name }}
           releaseBody: Download the setup file below. Installed apps offer this update on their own.
-          releaseDraft: false
+          releaseDraft: ${{ env.DRY_RUN == 'true' }}
           includeUpdaterJson: true
