@@ -235,7 +235,9 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
 
         let (duels, duels_src) = if is_last {
             let src = newest_first_limited(
-                values(&db["duels"]).filter(|d| text(&d["origin"]).as_deref() == Some("local") && !flag(&d["demo"])),
+                // Every duel in the addon's Duels (author, 2026-09-26): our own, shared by other
+                // HeadHunters and relayed at login; the website merges copies of one duel
+                values(&db["duels"]).filter(|d| !from_website(d) && !flag(&d["demo"])),
                 already.duels,
                 MAX_DUELS,
             );
@@ -676,7 +678,7 @@ mod tests {
         assert_eq!(main.character.realm_type, None);
         assert_eq!(main.deaths.len(), 1, "sim and demo deaths stay home");
         assert_eq!(main.catches.len(), 1, "guid outlaws and other hunters' catches stay home");
-        assert_eq!(main.duels.len(), 1, "only our own witnessed duels, no demo");
+        assert_eq!(main.duels.len(), 2, "our own and shared duels, no demo");
         assert_eq!(main.bounty_events.len(), 2, "own and hunter-less events, no skip");
         assert_eq!(main.zones.len(), 2);
 
