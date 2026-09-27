@@ -3,7 +3,8 @@
 //!
 //! The saved data is account-wide: own deaths name their victim, catches their hunter,
 //! bounty events their hunter (addon 0.1.4+). `meta.player` is the character played
-//! last; witnessed duels, learned zones and bounty events without a hunter go with it.
+//! last; witnessed duels, learned zones, bounty events without a hunter and the players'
+//! bounty posters and payments (addon HH-118, 0.2.2+) go with it.
 //! Demo and simulated records are never sent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,6 +18,8 @@ pub const MAX_CATCHES: usize = 500;
 pub const MAX_DUELS: usize = 2000;
 pub const MAX_BOUNTY_EVENTS: usize = 500;
 pub const MAX_ZONES: usize = 200;
+pub const MAX_POSTERS: usize = 200;
+pub const MAX_PAYMENTS: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -46,6 +49,10 @@ pub struct Sent {
     pub bounty: i64,
     #[serde(default)]
     pub zones: BTreeSet<i64>,
+    #[serde(default)]
+    pub posters: i64,
+    #[serde(default)]
+    pub payments: i64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -58,6 +65,8 @@ pub struct Payload {
     pub duels: Vec<Duel>,
     pub bounty_events: Vec<BountyEvent>,
     pub zones: Vec<Zone>,
+    pub bounty_posters: Vec<BountyPoster>,
+    pub bounty_payments: Vec<BountyPayment>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -166,6 +175,29 @@ pub struct BountyEvent {
     pub outlaw: Option<PlayerRef>,
 }
 
+/// A player's bounty on their killer (addon `db.posters`).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct BountyPoster {
+    pub t: i64,
+    pub owner: PlayerRef,
+    pub target: PlayerRef,
+    pub reason: i64,
+    /// Copper
+    pub gold: i64,
+    pub until: i64,
+}
+
+/// A bounty claimed, paid or unpaid (addon `db.bountyPay`); `t` is when it got this status.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct BountyPayment {
+    pub t: i64,
+    pub poster_owner: PlayerRef,
+    pub poster_t: i64,
+    pub hunter: PlayerRef,
+    pub status: String,
+    pub claimed_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Zone {
     pub map_id: i64,
@@ -268,7 +300,28 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         };
         after.zones.extend(zones.iter().map(|z| z.map_id));
 
-        if deaths_out.is_empty() && catches.is_empty() && duels.is_empty() && bounty_events.is_empty() && zones.is_empty() {
+        // Players' bounties (HH-118): every poster and payment the addon knows, like duels
+        let (posters_src, payments_src) = if is_last {
+            (
+                newest_first_limited(values(&db["posters"]), already.posters, MAX_POSTERS),
+                newest_first_limited(values(&db["bountyPay"]), already.payments, MAX_PAYMENTS),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let bounty_posters: Vec<BountyPoster> = posters_src.iter().filter_map(|p| bounty_poster(p, client)).collect();
+        let bounty_payments: Vec<BountyPayment> = payments_src.iter().filter_map(|p| bounty_payment(p, client)).collect();
+        after.posters = max_t(&posters_src, already.posters);
+        after.payments = max_t(&payments_src, already.payments);
+
+        if deaths_out.is_empty()
+            && catches.is_empty()
+            && duels.is_empty()
+            && bounty_events.is_empty()
+            && zones.is_empty()
+            && bounty_posters.is_empty()
+            && bounty_payments.is_empty()
+        {
             continue;
         }
 
@@ -283,6 +336,8 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 duels,
                 bounty_events,
                 zones,
+                bounty_posters,
+                bounty_payments,
             },
             sent_after: after,
         });
@@ -496,6 +551,39 @@ fn bounty_event(e: &Value, client: Client) -> Option<BountyEvent> {
         }),
         outlaw_name: outlaw_name.map(|o| o.chars().take(80).collect()),
         kind,
+    })
+}
+
+/// A plain player key; a Forever killer known only by the given name ("guid:...") is left out.
+fn player_ref(key: &str, client: Client) -> Option<PlayerRef> {
+    if key.starts_with("guid:") {
+        return None;
+    }
+    let (name, realm) = split_key(key, client);
+    Some(PlayerRef { name, realm, ..PlayerRef::default() })
+}
+
+fn bounty_poster(p: &Value, client: Client) -> Option<BountyPoster> {
+    Some(BountyPoster {
+        t: int(&p["t"])?,
+        owner: player_ref(&text(&p["owner"])?, client)?,
+        target: player_ref(&text(&p["target"])?, client)?,
+        reason: int(&p["reason"]).filter(|r| (1..=4).contains(r))?,
+        gold: int(&p["gold"]).filter(|g| *g >= 1)?,
+        until: int(&p["until"])?,
+    })
+}
+
+fn bounty_payment(p: &Value, client: Client) -> Option<BountyPayment> {
+    // The poster id is "<owner>:<time>"; player keys never hold a colon
+    let (owner, poster_t) = text(&p["posterId"])?.rsplit_once(':').map(|(o, t)| (o.to_string(), t.to_string()))?;
+    Some(BountyPayment {
+        t: int(&p["t"])?,
+        poster_owner: player_ref(&owner, client)?,
+        poster_t: poster_t.parse().ok()?,
+        hunter: player_ref(&text(&p["hunter"])?, client)?,
+        status: text(&p["status"]).filter(|s| matches!(s.as_str(), "claimed" | "paid" | "unpaid"))?,
+        claimed_at: int(&p["claimedAt"])?,
     })
 }
 
@@ -737,6 +825,31 @@ mod tests {
         assert_eq!(later[0].payload.deaths.len(), 1);
         assert_eq!(later[0].payload.deaths[0].t, 900);
         assert!(later[0].payload.zones.is_empty(), "zones already sent");
+    }
+
+    #[test]
+    fn sends_the_players_bounties_with_the_last_character() {
+        let mut db = era_db();
+        db["posters"] = json!({
+            "Tessa-Firemaw:500": { "id": "Tessa-Firemaw:500", "owner": "Tessa-Firemaw", "target": "Brute-Firemaw", "reason": 1,
+              "gold": 20000, "until": 259700, "t": 500, "origin": "local" },
+            "Tessa-Firemaw:600": { "owner": "Tessa-Firemaw", "target": "guid:Player-1-X", "reason": 2, "gold": 20000, "until": 9000, "t": 600 }
+        });
+        db["bountyPay"] = json!({
+            "Tessa-Firemaw:500": { "posterId": "Tessa-Firemaw:500", "hunter": "Kestrel-Firemaw", "status": "unpaid",
+              "claimedAt": 700, "t": 800, "origin": "peer" }
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let main = by_key(&uploads, "Tessa-Firemaw");
+        assert_eq!(main.payload.bounty_posters.len(), 1, "a given-name-only target is left out");
+        let poster = &main.payload.bounty_posters[0];
+        assert_eq!((poster.owner.name.as_str(), poster.target.name.as_str()), ("Tessa", "Brute"));
+        assert_eq!((poster.gold, poster.until, poster.reason), (20000, 259700, 1));
+        let pay = &main.payload.bounty_payments[0];
+        assert_eq!((pay.poster_owner.name.as_str(), pay.poster_t), ("Tessa", 500));
+        assert_eq!((pay.hunter.name.as_str(), pay.status.as_str(), pay.claimed_at, pay.t), ("Kestrel", "unpaid", 700, 800));
+        assert_eq!((main.sent_after.posters, main.sent_after.payments), (600, 800));
+        assert!(by_key(&uploads, "Alt-Firemaw").payload.bounty_posters.is_empty(), "only with the last character");
     }
 
     #[test]
