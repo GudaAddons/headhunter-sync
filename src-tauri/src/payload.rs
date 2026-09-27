@@ -3,8 +3,9 @@
 //!
 //! The saved data is account-wide: own deaths name their victim, catches their hunter,
 //! bounty events their hunter (addon 0.1.4+). `meta.player` is the character played
-//! last; witnessed duels, learned zones, bounty events without a hunter and the players'
-//! bounty posters and payments (addon HH-118, 0.2.2+) go with it.
+//! last; witnessed duels, learned zones, bounty events without a hunter, the deaths other
+//! HeadHunters shared and the players' bounty posters and payments (addon HH-118,
+//! 0.2.2+) go with it.
 //! Demo and simulated records are never sent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,6 +21,7 @@ pub const MAX_BOUNTY_EVENTS: usize = 500;
 pub const MAX_ZONES: usize = 200;
 pub const MAX_POSTERS: usize = 200;
 pub const MAX_PAYMENTS: usize = 500;
+pub const MAX_SHARED_DEATHS: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -53,6 +55,8 @@ pub struct Sent {
     pub posters: i64,
     #[serde(default)]
     pub payments: i64,
+    #[serde(default)]
+    pub shared_deaths: i64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -67,6 +71,7 @@ pub struct Payload {
     pub zones: Vec<Zone>,
     pub bounty_posters: Vec<BountyPoster>,
     pub bounty_payments: Vec<BountyPayment>,
+    pub shared_deaths: Vec<SharedDeath>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -175,6 +180,15 @@ pub struct BountyEvent {
     pub outlaw: Option<PlayerRef>,
 }
 
+/// Another HeadHunter's death the addon took in (addon `db.reports`, origin peer or
+/// relay): the website needs them for the same WANTED list as in the game.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SharedDeath {
+    pub victim: PlayerRef,
+    #[serde(flatten)]
+    pub death: Death,
+}
+
 /// A player's bounty on their killer (addon `db.posters`).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct BountyPoster {
@@ -237,6 +251,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
     let deaths = own_deaths(db);
     let (keys, last_player) = character_keys(db, &deaths);
 
+    let own = keys.clone();
     let mut uploads = Vec::new();
     for key in keys {
         let is_last = last_player.as_deref() == Some(key.as_str());
@@ -314,7 +329,16 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         after.posters = max_t(&posters_src, already.posters);
         after.payments = max_t(&payments_src, already.payments);
 
+        let shared_src = if is_last {
+            newest_first_limited(shared_deaths(db, &own), already.shared_deaths, MAX_SHARED_DEATHS)
+        } else {
+            Vec::new()
+        };
+        let shared_out: Vec<SharedDeath> = shared_src.iter().filter_map(|d| shared_death(d, client)).collect();
+        after.shared_deaths = max_t(&shared_src, already.shared_deaths);
+
         if deaths_out.is_empty()
+            && shared_out.is_empty()
             && catches.is_empty()
             && duels.is_empty()
             && bounty_events.is_empty()
@@ -338,6 +362,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 zones,
                 bounty_posters,
                 bounty_payments,
+                shared_deaths: shared_out,
             },
             sent_after: after,
         });
@@ -435,6 +460,32 @@ fn own_deaths(db: &Value) -> Vec<&Value> {
                 && matches!(text(&d["confidence"]).as_deref(), Some("exact") | Some("inferred"))
         })
         .collect()
+}
+
+/// Deaths other HeadHunters shared with us or passed on at login, not our own characters'.
+fn shared_deaths<'a>(db: &'a Value, own: &'a BTreeSet<String>) -> impl Iterator<Item = &'a Value> + 'a {
+    values(&db["reports"]).filter(move |d| {
+        matches!(text(&d["origin"]).as_deref(), Some("peer") | Some("relay"))
+            && !flag(&d["demo"])
+            && matches!(text(&d["confidence"]).as_deref(), Some("exact") | Some("inferred"))
+            && text(&d["victim"]["key"]).is_some_and(|key| !own.contains(&key))
+    })
+}
+
+fn shared_death(d: &Value, client: Client) -> Option<SharedDeath> {
+    let key = text(&d["victim"]["key"])?;
+    let (name, realm) = split_key(&key, client);
+    let race = text(&d["victim"]["race"]);
+    Some(SharedDeath {
+        victim: PlayerRef {
+            name,
+            realm,
+            class: text(&d["victim"]["class"]).map(|c| c.to_lowercase()),
+            faction: race.as_deref().and_then(faction_of_race),
+            race: race.as_deref().and_then(map_race),
+        },
+        death: death(d, client)?,
+    })
 }
 
 /// Records the HeadHunter_Data addon brought back; the website has them already.
@@ -850,6 +901,36 @@ mod tests {
         assert_eq!((pay.hunter.name.as_str(), pay.status.as_str(), pay.claimed_at, pay.t), ("Kestrel", "unpaid", 700, 800));
         assert_eq!((main.sent_after.posters, main.sent_after.payments), (600, 800));
         assert!(by_key(&uploads, "Alt-Firemaw").payload.bounty_posters.is_empty(), "only with the last character");
+    }
+
+    #[test]
+    fn sends_the_deaths_other_headhunters_shared_with_the_last_character() {
+        let mut db = era_db();
+        db["reports"] = json!({
+            "Rowena-Firemaw:500": { "id": "Rowena-Firemaw:500", "t": 500, "origin": "peer",
+              "victim": { "key": "Rowena-Firemaw", "level": 30, "class": "HUNTER", "race": "Troll" },
+              "killer": { "key": "Brute-Firemaw", "level": 45, "class": "WARRIOR", "race": "Human" },
+              "mapID": 1413, "confidence": "exact", "classification": "coward" },
+            "Tessa-Firemaw:100": { "id": "Tessa-Firemaw:100", "t": 100, "origin": "local",
+              "victim": { "key": "Tessa-Firemaw", "level": 41 }, "killer": { "key": "Brute-Firemaw", "level": 60 },
+              "confidence": "exact", "classification": "coward" },
+            "Alt-Firemaw:600": { "id": "Alt-Firemaw:600", "t": 600, "origin": "relay",
+              "victim": { "key": "Alt-Firemaw", "level": 20 }, "killer": { "key": "Brute-Firemaw", "level": 30 },
+              "confidence": "exact", "classification": "normal" },
+            "Sim-Firemaw:700": { "id": "Sim-Firemaw:700", "t": 700, "origin": "peer",
+              "victim": { "key": "Sim-Firemaw", "level": 20 }, "killer": { "key": "Brute-Firemaw", "level": 30 },
+              "confidence": "sim", "classification": "normal" }
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let main = by_key(&uploads, "Tessa-Firemaw");
+        assert_eq!(main.payload.shared_deaths.len(), 1, "not our own, not a simulation");
+        let shared = &main.payload.shared_deaths[0];
+        assert_eq!(shared.victim.name, "Rowena");
+        assert_eq!(shared.victim.faction.as_deref(), Some("horde"));
+        assert_eq!((shared.death.t, shared.death.victim_level), (500, 30));
+        assert_eq!(shared.death.attackers[0].name.as_deref(), Some("Brute"));
+        assert_eq!(main.sent_after.shared_deaths, 500);
+        assert!(by_key(&uploads, "Alt-Firemaw").payload.shared_deaths.is_empty(), "only with the last character");
     }
 
     #[test]
