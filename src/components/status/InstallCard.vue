@@ -72,7 +72,7 @@ defineProps<{
             <ul v-else class="divide-y divide-border">
                 <CharacterRow
                     v-for="character in account.characters"
-                    :key="character.key"
+                    :key="`${character.home}|${character.key}`"
                     :character="character"
                 />
             </ul>

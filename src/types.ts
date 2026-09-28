@@ -27,6 +27,7 @@ export type InstallSettings = {
 
 export type CharacterStatus = {
     key: string;
+    home: string | null;
     last_played: boolean;
     result: SyncResult | null;
 };

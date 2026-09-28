@@ -79,6 +79,8 @@ pub struct AccountStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct CharacterStatus {
     pub key: String,
+    /// "forever|4619"; `None` for an old flat file.
+    pub home: Option<String>,
     pub last_played: bool,
     pub result: Option<SyncResult>,
 }
@@ -166,26 +168,29 @@ impl Engine {
                     .iter()
                     .map(|account| {
                         let (characters, error) = match read_db(&account.saved_file) {
-                            Ok(db) => (
-                                payload::characters_in(&db),
-                                payload::world_keys(&db, &context(&install, &self.install_settings(&install), Default::default()))
-                                    .err()
-                                    .map(|e| e.to_string()),
-                            ),
-                            Err(e) => (Default::default(), Some(e)),
+                            Ok(db) => {
+                                let context = context(&install, &self.install_settings(&install), Default::default());
+                                let homes = payload::homes(&db);
+                                let error = homes.iter().find_map(|home| payload::world_keys(&home.db, &context).err()).map(|e| e.to_string());
+                                let characters = homes
+                                    .iter()
+                                    .flat_map(|home| {
+                                        payload::characters_in(&home.db).into_iter().map(|(key, last_played)| CharacterStatus {
+                                            result: state
+                                                .results
+                                                .get(&store::state_key(&path, &account.name, home.key.as_deref(), &key))
+                                                .cloned(),
+                                            home: home.key.clone(),
+                                            key,
+                                            last_played: last_played && home.last,
+                                        })
+                                    })
+                                    .collect();
+                                (characters, error)
+                            }
+                            Err(e) => (Vec::new(), Some(e)),
                         };
-                        AccountStatus {
-                            name: account.name.clone(),
-                            characters: characters
-                                .into_iter()
-                                .map(|(key, last_played)| CharacterStatus {
-                                    result: state.results.get(&store::state_key(&path, &account.name, &key)).cloned(),
-                                    key,
-                                    last_played,
-                                })
-                                .collect(),
-                            error,
-                        }
+                        AccountStatus { name: account.name.clone(), characters, error }
                     })
                     .collect();
                 InstallStatus {
@@ -274,18 +279,22 @@ impl Engine {
                     }
                 };
                 let context = context(&install, &install_settings, known_servers.clone());
-                worlds.extend(payload::world_keys(&db, &context).unwrap_or_default());
                 let sent = self.state.lock().unwrap().sent.clone();
-                // An unknown region needs the player (a login or a setting), not a retry;
-                // the account shows why on the status screen.
-                let Ok(uploads) = payload::build(&db, &context, |key| {
-                    sent.get(&store::state_key(&path, &account.name, key)).cloned().unwrap_or_default()
-                }) else {
-                    continue;
-                };
+                let mut uploads = Vec::new();
+                for home in payload::homes(&db) {
+                    worlds.extend(payload::world_keys(&home.db, &context).unwrap_or_default());
+                    // An unknown region needs the player (a login or a setting), not a retry;
+                    // the account shows why on the status screen.
+                    let Ok(built) = payload::build(&home.db, &context, |key| {
+                        sent.get(&store::state_key(&path, &account.name, home.key.as_deref(), key)).cloned().unwrap_or_default()
+                    }) else {
+                        continue;
+                    };
+                    uploads.extend(built.into_iter().map(|upload| (home.key.clone(), upload)));
+                }
 
-                for upload in uploads {
-                    let key = store::state_key(&path, &account.name, &upload.key);
+                for (home, upload) in uploads {
+                    let key = store::state_key(&path, &account.name, home.as_deref(), &upload.key);
                     let records = upload.payload.deaths.len()
                         + upload.payload.catches.len()
                         + upload.payload.duels.len()

@@ -63,7 +63,7 @@ impl Default for InstallSettings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
-    /// "install|account|character" -> what was sent.
+    /// "install|account|home|character" ("install|account|character" for an old flat file) -> what was sent.
     pub sent: BTreeMap<String, Sent>,
     /// Same key -> the last result.
     pub results: BTreeMap<String, SyncResult>,
@@ -94,8 +94,12 @@ pub struct SyncResult {
     pub records: usize,
 }
 
-pub fn state_key(install: &str, account: &str, character: &str) -> String {
-    format!("{install}|{account}|{character}")
+/// An old flat file has no home, so its key stays as before and its state is kept.
+pub fn state_key(install: &str, account: &str, home: Option<&str>, character: &str) -> String {
+    match home {
+        Some(home) => format!("{install}|{account}|{home}|{character}"),
+        None => format!("{install}|{account}|{character}"),
+    }
 }
 
 pub fn load<T: DeserializeOwned + Default>(path: &Path) -> T {
@@ -152,5 +156,14 @@ mod tests {
         assert_eq!(partial.interval_minutes, 30);
         assert!(partial.sync_on_change, "missing fields take their defaults");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn state_keys_keep_the_old_form_without_a_home() {
+        assert_eq!(state_key("G:/WoW/_classic_", "ACC1", None, "Tessa-Firemaw"), "G:/WoW/_classic_|ACC1|Tessa-Firemaw");
+        assert_eq!(
+            state_key("G:/WoW/_classic_beta_", "ACC1", Some("forever|4619"), "Grim Pvp"),
+            "G:/WoW/_classic_beta_|ACC1|forever|4619|Grim Pvp"
+        );
     }
 }

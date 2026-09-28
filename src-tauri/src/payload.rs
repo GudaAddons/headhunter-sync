@@ -25,6 +25,14 @@ pub const MAX_SHARED_DEATHS: usize = 500;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
 const SERVER_FIELD: &str = "server";
 pub const MIN_SERVER: i64 = 1;
+/// Addon schema 2 keeps each home's tables under `homes["forever|4619"]`.
+const HOMES_FIELD: &str = "homes";
+const META_FIELD: &str = "meta";
+const PLAYER_FIELD: &str = "player";
+/// `meta.home`: the home played last.
+const HOME_FIELD: &str = "home";
+/// Map names stay at the root in every schema.
+const ZONES_FIELD: &str = "zones";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -62,6 +70,10 @@ pub struct Sent {
     pub payments: i64,
     #[serde(default)]
     pub shared_deaths: i64,
+    /// The Forever server sent last: a new one is sent even with no new records, so the
+    /// website files the character under its server's realm type.
+    #[serde(default)]
+    pub server: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -252,6 +264,39 @@ fn default_region(client: Client) -> Option<&'static str> {
     }
 }
 
+/// One home of the saved file as a flat file: its tables, the root zones and the root
+/// meta with the home's own player.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Home {
+    /// "forever|4619"; `None` for an old flat file.
+    pub key: Option<String>,
+    /// The home played last.
+    pub last: bool,
+    pub db: Value,
+}
+
+/// Every home in the file (addon schema 2); an old flat file is one home without a key.
+pub fn homes(db: &Value) -> Vec<Home> {
+    let Some(homes) = db[HOMES_FIELD].as_object() else {
+        return vec![Home { key: None, last: true, db: db.clone() }];
+    };
+    let last_home = text(&db[META_FIELD][HOME_FIELD]);
+    homes
+        .iter()
+        .filter_map(|(key, home)| {
+            let mut view = home.as_object()?.clone();
+            let mut meta = db[META_FIELD].as_object().cloned().unwrap_or_default();
+            meta.remove(PLAYER_FIELD);
+            if let Some(player) = view.remove(PLAYER_FIELD) {
+                meta.insert(PLAYER_FIELD.into(), player);
+            }
+            view.insert(META_FIELD.into(), Value::Object(meta));
+            view.insert(ZONES_FIELD.into(), db[ZONES_FIELD].clone());
+            Some(Home { key: Some(key.clone()), last: last_home.as_deref() == Some(key.as_str()), db: Value::Object(view) })
+        })
+        .collect()
+}
+
 /// Every character's upload with records newer than `sent(key)`; characters with
 /// nothing new are left out.
 pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<Vec<CharacterUpload>, PayloadError> {
@@ -345,7 +390,11 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         let shared_out: Vec<SharedDeath> = shared_src.iter().filter_map(|d| shared_death(d, client)).collect();
         after.shared_deaths = max_t(&shared_src, already.shared_deaths);
 
-        if deaths_out.is_empty()
+        let new_server = character.server.is_some() && character.server != already.server;
+        after.server = character.server.or(already.server);
+
+        if !new_server
+            && deaths_out.is_empty()
             && shared_out.is_empty()
             && catches.is_empty()
             && duels.is_empty()
@@ -404,12 +453,12 @@ fn client_name(client: Client) -> &'static str {
 }
 
 fn client_and_region(db: &Value, ctx: &Context) -> Result<(Client, String), PayloadError> {
-    let client = match text(&db["meta"]["client"]).as_deref() {
+    let client = match text(&db[META_FIELD]["client"]).as_deref() {
         Some("era") => Client::Era,
         Some("forever") => Client::Forever,
         _ => ctx.client,
     };
-    let region = text(&db["meta"]["region"])
+    let region = text(&db[META_FIELD]["region"])
         .or_else(|| ctx.region.clone())
         .or_else(|| default_region(client).map(String::from))
         .ok_or(PayloadError::UnknownRegion)?;
@@ -418,7 +467,7 @@ fn client_and_region(db: &Value, ctx: &Context) -> Result<(Client, String), Payl
 
 /// Every character with own deaths, plus the one played last (and which one that is).
 fn character_keys(db: &Value, deaths: &[&Value]) -> (BTreeSet<String>, Option<String>) {
-    let last_player = text(&db["meta"]["player"]["key"])
+    let last_player = text(&db[META_FIELD][PLAYER_FIELD]["key"])
         .or_else(|| deaths.iter().max_by_key(|d| int(&d["t"])).and_then(|d| text(&d["victim"]["key"])));
     let mut keys: BTreeSet<String> = deaths.iter().filter_map(|d| text(&d["victim"]["key"])).collect();
     keys.extend(last_player.clone());
@@ -428,7 +477,7 @@ fn character_keys(db: &Value, deaths: &[&Value]) -> (BTreeSet<String>, Option<St
 fn character(db: &Value, key: &str, is_last: bool, client: Client, region: &str, ctx: &Context, deaths: &[&Value]) -> Character {
     let (name, realm) = split_key(key, client);
     let snapshot = if is_last {
-        db["meta"]["player"].clone()
+        db[META_FIELD][PLAYER_FIELD].clone()
     } else {
         deaths
             .iter()
@@ -652,7 +701,7 @@ fn bounty_payment(p: &Value, client: Client) -> Option<BountyPayment> {
 }
 
 fn zone_list(db: &Value) -> Vec<Zone> {
-    let Some(map) = db["zones"].as_object() else { return Vec::new() };
+    let Some(map) = db[ZONES_FIELD].as_object() else { return Vec::new() };
     let mut zones: Vec<Zone> = map
         .iter()
         .filter_map(|(id, z)| {
@@ -754,7 +803,7 @@ fn flag(v: &Value) -> bool {
 /// Grouping helper for the status screen: characters found in a file.
 pub fn characters_in(db: &Value) -> BTreeMap<String, bool> {
     let mut found: BTreeMap<String, bool> = own_deaths(db).iter().filter_map(|d| text(&d["victim"]["key"])).map(|k| (k, false)).collect();
-    if let Some(last) = text(&db["meta"]["player"]["key"]) {
+    if let Some(last) = text(&db[META_FIELD][PLAYER_FIELD]["key"]) {
         found.insert(last, true);
     }
     found
@@ -969,6 +1018,118 @@ mod tests {
                   "killer": { "key": "Grim Tusk", "level": 12 }, "confidence": "exact", "classification": "normal" }
             ]
         })
+    }
+
+    #[test]
+    fn a_new_forever_server_is_sent_once_even_without_records() {
+        let db = json!({ "meta": { "client": "forever", "player": { "key": "Nib Sprocket", "level": 1, "server": 4620 } } });
+
+        let uploads = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        let nib = by_key(&uploads, "Nib Sprocket");
+        assert_eq!(nib.payload.character.server, Some(4620), "a character with nothing new still goes once");
+        assert_eq!(nib.sent_after.server, Some(4620), "and the server is remembered");
+
+        let same = build(&db, &ctx(Client::Forever), |_| Sent { server: Some(4620), ..Sent::default() }).unwrap();
+        assert!(same.is_empty(), "the same server again: nothing to send");
+
+        let moved = build(&db, &ctx(Client::Forever), |_| Sent { server: Some(4619), ..Sent::default() }).unwrap();
+        assert_eq!(moved.len(), 1, "another server: sent again");
+    }
+
+    fn homes_db() -> Value {
+        json!({
+            "schemaVersion": 2,
+            "meta": { "client": "forever", "home": "forever|4620", "player": { "key": "Nib Sprocket", "level": 1, "server": 4620 } },
+            "zones": { "1429": { "name": "Elwynn Forest", "continent": 1415 } },
+            "homes": {
+                "forever|4619": {
+                    "player": { "key": "Grim Pvp", "level": 20, "server": 4619, "race": "Orc", "class": "WARRIOR" },
+                    "deaths": [
+                        { "id": "Grim Pvp:100", "t": 100, "victim": { "key": "Grim Pvp", "level": 19, "server": 4619 },
+                          "killer": { "key": "Tall Shadow", "level": 22 }, "confidence": "exact", "classification": "normal" }
+                    ]
+                },
+                "forever|4620": {
+                    "player": { "key": "Nib Sprocket", "level": 1, "server": 4620, "race": "Gnome", "class": "MAGE" }
+                }
+            }
+        })
+    }
+
+    fn build_homes(db: &Value, context: &Context) -> Vec<(Option<String>, CharacterUpload)> {
+        homes(db)
+            .into_iter()
+            .flat_map(|home| build(&home.db, context, |_| Sent::default()).unwrap().into_iter().map(move |u| (home.key.clone(), u)))
+            .collect()
+    }
+
+    #[test]
+    fn each_home_is_a_flat_file_with_its_own_player() {
+        let list = homes(&homes_db());
+        let keys: Vec<Option<&str>> = list.iter().map(|h| h.key.as_deref()).collect();
+        assert_eq!(keys, vec![Some("forever|4619"), Some("forever|4620")]);
+        assert_eq!(list.iter().map(|h| h.last).collect::<Vec<_>>(), vec![false, true], "meta.home is the home played last");
+
+        let grim = &list[0].db;
+        assert_eq!(grim["meta"]["player"]["key"], "Grim Pvp", "the home's player, not the root one");
+        assert_eq!(grim["meta"]["client"], "forever");
+        assert_eq!(grim["zones"]["1429"]["name"], "Elwynn Forest", "zones come from the root");
+        assert!(grim.get("player").is_none() && grim.get("homes").is_none());
+
+        let flat = forever_db();
+        assert_eq!(homes(&flat), vec![Home { key: None, last: true, db: flat.clone() }], "an old flat file is one home without a key");
+    }
+
+    #[test]
+    fn a_home_without_a_player_has_meta_without_a_player() {
+        let db = json!({ "meta": { "client": "forever", "player": { "key": "Nib Sprocket" } }, "homes": { "forever|4621": { "deaths": [] } } });
+        let list = homes(&db);
+        assert_eq!(list.len(), 1);
+        assert!(list[0].db["meta"].get("player").is_none());
+        assert_eq!(list[0].db["meta"]["client"], "forever");
+    }
+
+    #[test]
+    fn every_home_uploads_its_own_characters() {
+        let uploads = build_homes(&homes_db(), &ctx(Client::Forever));
+        assert_eq!(uploads.len(), 2);
+
+        let (home, grim) = uploads.iter().find(|(_, u)| u.key == "Grim Pvp").expect("Grim Pvp");
+        assert_eq!(home.as_deref(), Some("forever|4619"));
+        assert_eq!(grim.payload.character.server, Some(4619));
+        assert_eq!(grim.payload.deaths.len(), 1);
+        assert_eq!(grim.payload.deaths[0].uid, "Grim Pvp:100");
+        assert_eq!(grim.payload.character.race.as_deref(), Some("orc"));
+
+        let (home, nib) = uploads.iter().find(|(_, u)| u.key == "Nib Sprocket").expect("Nib Sprocket");
+        assert_eq!(home.as_deref(), Some("forever|4620"));
+        assert_eq!(nib.payload.character.server, Some(4620));
+        assert_eq!(nib.payload.character.level, Some(1));
+        assert!(nib.payload.deaths.is_empty() && nib.payload.duels.is_empty(), "only the server goes");
+        assert_eq!(nib.sent_after.server, Some(4620));
+    }
+
+    #[test]
+    fn world_keys_come_from_every_home() {
+        let context = Context { known_servers: BTreeSet::from([4619, 4620]), ..ctx(Client::Forever) };
+        let keys: BTreeSet<String> = homes(&homes_db()).iter().flat_map(|home| world_keys(&home.db, &context).unwrap()).collect();
+        assert_eq!(keys.into_iter().collect::<Vec<_>>(), vec!["forever|us|4619".to_string(), "forever|us|4620".to_string()]);
+
+        let characters: Vec<String> = homes(&homes_db()).iter().flat_map(|home| characters_in(&home.db).into_keys()).collect();
+        assert_eq!(characters, vec!["Grim Pvp".to_string(), "Nib Sprocket".to_string()]);
+    }
+
+    #[test]
+    fn an_old_flat_file_builds_as_before() {
+        let direct = build(&forever_db(), &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        let through_homes: Vec<CharacterUpload> = build_homes(&forever_db(), &ctx(Client::Forever))
+            .into_iter()
+            .map(|(home, upload)| {
+                assert_eq!(home, None);
+                upload
+            })
+            .collect();
+        assert_eq!(through_homes, direct);
     }
 
     #[test]
