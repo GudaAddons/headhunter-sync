@@ -5,16 +5,20 @@
 //! loaded back. HeadHunter lists it as an optional dependency and reads
 //! `HeadHunter_SiteData`; the data keeps the website's names, the addon maps them.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::installs;
-use crate::lua;
+use crate::{lua, payload};
 
 pub const FOLDER: &str = "HeadHunter_Data";
 pub const VARIABLE: &str = "HeadHunter_SiteData";
+pub const DATA_FILE: &str = "Data.lua";
+/// The answer's map of Forever server numbers to realm types.
+pub const FOREVER_SERVERS: &str = "forever_servers";
 /// Used when HeadHunter's own .toc cannot be read.
 const FALLBACK_INTERFACE: &str = "11509, 16001";
 
@@ -25,7 +29,7 @@ pub fn data_dir(game: &Path) -> Option<PathBuf> {
 
 /// Whether the data file is still there (the player may have deleted the folder).
 pub fn written(game: &Path) -> bool {
-    data_dir(game).is_some_and(|dir| dir.join("Data.lua").is_file())
+    data_dir(game).is_some_and(|dir| dir.join(DATA_FILE).is_file())
 }
 
 pub fn toc(interface: &str, version: &str) -> String {
@@ -35,7 +39,7 @@ pub fn toc(interface: &str, version: &str) -> String {
          ## Notes: The HeadHunter website's WANTED and Duels lists and your own records, written by HeadHunter Sync.\n\
          ## Author: Vati\n\
          ## Version: {version}\n\
-         Data.lua\n"
+         {DATA_FILE}\n"
     )
 }
 
@@ -54,7 +58,7 @@ pub fn write(game: &Path, data: &Value) -> Result<bool, String> {
         .unwrap_or_else(|| FALLBACK_INTERFACE.to_string());
     let files = [
         (dir.join(format!("{FOLDER}.toc")), toc(&interface, env!("CARGO_PKG_VERSION"))),
-        (dir.join("Data.lua"), data_file(data)),
+        (dir.join(DATA_FILE), data_file(data)),
     ];
     if files.iter().all(|(path, text)| fs::read_to_string(path).is_ok_and(|old| &old == text)) {
         return Ok(false);
@@ -67,6 +71,20 @@ pub fn write(game: &Path, data: &Value) -> Result<bool, String> {
             .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
     }
     Ok(true)
+}
+
+/// The Forever server numbers the website knew at the last download (`forever_servers`
+/// in Data.lua); empty before the first download.
+pub fn known_servers(game: &Path) -> BTreeSet<i64> {
+    data_dir(game)
+        .and_then(|dir| fs::read_to_string(dir.join(DATA_FILE)).ok())
+        .and_then(|text| lua::read_variable(&text, VARIABLE).ok())
+        .and_then(|data| {
+            data[FOREVER_SERVERS]
+                .as_object()
+                .map(|servers| servers.keys().filter_map(|k| k.parse().ok()).filter(|s: &i64| *s >= payload::MIN_SERVER).collect())
+        })
+        .unwrap_or_default()
 }
 
 /// WANTED entries across the worlds, for the status screen.
@@ -109,7 +127,7 @@ mod tests {
         let toc = fs::read_to_string(dir.join("HeadHunter_Data.toc")).unwrap();
         assert!(toc.contains("## Interface: 11508, 16001"), "the interface follows HeadHunter's .toc");
         assert!(toc.ends_with("Data.lua\n"));
-        let data = fs::read_to_string(dir.join("Data.lua")).unwrap();
+        let data = fs::read_to_string(dir.join(DATA_FILE)).unwrap();
         assert_eq!(lua::read_variable(&data, VARIABLE).unwrap(), site_data(), "Data.lua holds the website's answer");
         assert!(written(&game));
 
@@ -117,6 +135,22 @@ mod tests {
         let mut changed = site_data();
         changed["generated_at"] = json!(1790300600);
         assert!(write(&game, &changed).unwrap(), "new data is written");
+
+        let _ = fs::remove_dir_all(game.parent().unwrap());
+    }
+
+    #[test]
+    fn reads_the_known_servers_back_from_data_lua() {
+        let game = game_with_addon("servers");
+        assert!(known_servers(&game).is_empty(), "no data file yet");
+
+        let mut data = site_data();
+        data["forever_servers"] = json!({ "4619": "pvp", "4620": "pve", "x": "pvp" });
+        write(&game, &data).unwrap();
+        assert_eq!(known_servers(&game), BTreeSet::from([4619, 4620]));
+
+        write(&game, &site_data()).unwrap();
+        assert!(known_servers(&game).is_empty(), "an answer without servers");
 
         let _ = fs::remove_dir_all(game.parent().unwrap());
     }

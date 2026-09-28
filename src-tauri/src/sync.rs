@@ -168,7 +168,7 @@ impl Engine {
                         let (characters, error) = match read_db(&account.saved_file) {
                             Ok(db) => (
                                 payload::characters_in(&db),
-                                payload::world_keys(&db, &context(&install, &self.install_settings(&install)))
+                                payload::world_keys(&db, &context(&install, &self.install_settings(&install), Default::default()))
                                     .err()
                                     .map(|e| e.to_string()),
                             ),
@@ -264,6 +264,7 @@ impl Engine {
             }
             let path = install.path.to_string_lossy().to_string();
             let mut worlds = std::collections::BTreeSet::new();
+            let known_servers = download::known_servers(&install.path);
             for account in &install.accounts {
                 let db = match read_db(&account.saved_file) {
                     Ok(db) => db,
@@ -272,7 +273,7 @@ impl Engine {
                         continue;
                     }
                 };
-                let context = context(&install, &install_settings);
+                let context = context(&install, &install_settings, known_servers.clone());
                 worlds.extend(payload::world_keys(&db, &context).unwrap_or_default());
                 let sent = self.state.lock().unwrap().sent.clone();
                 // An unknown region needs the player (a login or a setting), not a retry;
@@ -481,11 +482,13 @@ enum DownloadStop {
 
 /// What the saved file cannot say: the region comes from the setting, else from the
 /// game's own config (`SET portal`); the addon's saved region still wins over both.
-fn context(install: &Install, settings: &InstallSettings) -> Context {
+/// Forever servers the website does not know yet take the install's realm type.
+fn context(install: &Install, settings: &InstallSettings, known_servers: std::collections::BTreeSet<i64>) -> Context {
     Context {
         client: install.client,
         region: settings.region.clone().or_else(|| install.portal_region.clone()),
         realm_type: settings.realm_type.clone(),
+        known_servers,
         addon_version: install.addon_version.clone().unwrap_or_else(|| "unknown".into()),
     }
 }

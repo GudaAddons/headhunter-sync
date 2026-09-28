@@ -22,6 +22,9 @@ pub const MAX_ZONES: usize = 200;
 pub const MAX_POSTERS: usize = 200;
 pub const MAX_PAYMENTS: usize = 500;
 pub const MAX_SHARED_DEATHS: usize = 500;
+/// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
+const SERVER_FIELD: &str = "server";
+pub const MIN_SERVER: i64 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -39,6 +42,8 @@ pub struct Context {
     pub region: Option<String>,
     /// Forever worlds (pvp, pve, roleplay, hardcore): the addon cannot tell.
     pub realm_type: String,
+    /// Forever server numbers the website knows (`forever_servers` of its last download).
+    pub known_servers: BTreeSet<i64>,
     pub addon_version: String,
 }
 
@@ -80,6 +85,9 @@ pub struct Character {
     pub region: String,
     pub realm: Option<String>,
     pub realm_type: Option<String>,
+    /// Forever server number (the middle part of the character GUID).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<i64>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faction: Option<String>,
@@ -371,7 +379,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
 }
 
 /// The world key of every character in the file, as the website's download takes it:
-/// "era|eu|Firemaw" or "forever|us|pvp".
+/// "era|eu|Firemaw", "forever|us|4620" for a server the website knows, else "forever|us|pvp".
 pub fn world_keys(db: &Value, ctx: &Context) -> Result<BTreeSet<String>, PayloadError> {
     let (client, region) = client_and_region(db, ctx)?;
     let deaths = own_deaths(db);
@@ -381,7 +389,8 @@ pub fn world_keys(db: &Value, ctx: &Context) -> Result<BTreeSet<String>, Payload
         .filter_map(|key| {
             let is_last = last_player.as_deref() == Some(key.as_str());
             let character = character(db, key, is_last, client, &region, ctx, &deaths);
-            let place = character.realm.or(character.realm_type)?;
+            let known = character.server.filter(|s| ctx.known_servers.contains(s)).map(|s| s.to_string());
+            let place = character.realm.or(known).or(character.realm_type)?;
             Some(format!("{}|{}|{}", client_name(client), region, place))
         })
         .collect())
@@ -438,6 +447,10 @@ fn character(db: &Value, key: &str, is_last: bool, client: Client, region: &str,
         },
         realm_type: match client {
             Client::Forever => Some(ctx.realm_type.clone()),
+            Client::Era => None,
+        },
+        server: match client {
+            Client::Forever => int(&snapshot[SERVER_FIELD]).filter(|s| *s >= MIN_SERVER),
             Client::Era => None,
         },
         name,
@@ -753,7 +766,7 @@ mod tests {
     use serde_json::json;
 
     fn ctx(client: Client) -> Context {
-        Context { client, region: None, realm_type: "pvp".into(), addon_version: "0.1.4".into() }
+        Context { client, region: None, realm_type: "pvp".into(), known_servers: BTreeSet::new(), addon_version: "0.1.4".into() }
     }
 
     /// Made-up players only (never the author's characters).
@@ -942,6 +955,61 @@ mod tests {
         let context = Context { realm_type: "hardcore".into(), ..ctx(Client::Forever) };
         let keys = world_keys(&forever, &context).unwrap();
         assert_eq!(keys.into_iter().collect::<Vec<_>>(), vec!["forever|us|hardcore".to_string()], "Forever takes the install's realm type");
+    }
+
+    fn forever_db() -> Value {
+        json!({
+            "meta": { "client": "forever", "player": { "key": "Tess Rider", "level": 14, "server": 4620 } },
+            "deaths": [
+                { "id": "Mira Vale:100", "t": 100, "victim": { "key": "Mira Vale", "level": 10, "server": 4619 },
+                  "killer": { "key": "Grim Tusk", "level": 12 }, "confidence": "exact", "classification": "normal" },
+                { "id": "Mira Vale:200", "t": 200, "victim": { "key": "Mira Vale", "level": 11, "server": 4621 },
+                  "killer": { "key": "Grim Tusk", "level": 12 }, "confidence": "exact", "classification": "normal" },
+                { "id": "Tess Rider:150", "t": 150, "victim": { "key": "Tess Rider", "level": 13, "server": 4620 },
+                  "killer": { "key": "Grim Tusk", "level": 12 }, "confidence": "exact", "classification": "normal" }
+            ]
+        })
+    }
+
+    #[test]
+    fn forever_characters_send_their_server() {
+        let uploads = build(&forever_db(), &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        let tess = &by_key(&uploads, "Tess Rider").payload.character;
+        assert_eq!(tess.server, Some(4620), "the last player's server from meta.player");
+        assert_eq!(tess.realm_type.as_deref(), Some("pvp"), "the realm type is still sent");
+        assert_eq!(by_key(&uploads, "Mira Vale").payload.character.server, Some(4621), "from the newest own death");
+
+        let mut db = forever_db();
+        db["meta"]["player"]["server"] = json!(0);
+        let uploads = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        let json = serde_json::to_value(&by_key(&uploads, "Tess Rider").payload).unwrap();
+        assert!(json["character"].get("server").is_none(), "no server when it is not a positive number");
+
+        let mut db = era_db();
+        db["meta"]["player"]["server"] = json!(4620);
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        assert_eq!(by_key(&uploads, "Tessa-Firemaw").payload.character.server, None, "Era has realms, not servers");
+    }
+
+    #[test]
+    fn forever_world_keys_use_the_servers_the_website_knows() {
+        let context = Context { known_servers: BTreeSet::from([4620, 4621]), ..ctx(Client::Forever) };
+        let keys: Vec<String> = world_keys(&forever_db(), &context).unwrap().into_iter().collect();
+        assert_eq!(keys, vec!["forever|us|4620".to_string(), "forever|us|4621".to_string()]);
+
+        let context = Context { known_servers: BTreeSet::from([4620]), ..ctx(Client::Forever) };
+        let keys: Vec<String> = world_keys(&forever_db(), &context).unwrap().into_iter().collect();
+        assert_eq!(keys, vec!["forever|us|4620".to_string(), "forever|us|pvp".to_string()], "an unknown server takes the realm type");
+
+        let no_server = json!({ "meta": { "client": "forever", "player": { "key": "Tess Rider" } } });
+        let keys: Vec<String> = world_keys(&no_server, &context).unwrap().into_iter().collect();
+        assert_eq!(keys, vec!["forever|us|pvp".to_string()], "no server takes the realm type");
+
+        let mut era = era_db();
+        era["meta"]["player"]["server"] = json!(4620);
+        let context = Context { known_servers: BTreeSet::from([4620]), ..ctx(Client::Era) };
+        let keys: Vec<String> = world_keys(&era, &context).unwrap().into_iter().collect();
+        assert_eq!(keys, vec!["era|eu|Firemaw".to_string()], "Era keeps the realm");
     }
 
     #[test]
