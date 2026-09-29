@@ -8,6 +8,7 @@ import {
 import { computed } from 'vue';
 import { Badge } from '@/components/ui/badge';
 import { ago, splitKey } from '@/lib/format';
+import { trans } from '@/lib/i18n';
 import type { CharacterStatus } from '@/types';
 
 const props = defineProps<{
@@ -17,12 +18,12 @@ const props = defineProps<{
 const who = computed(() => splitKey(props.character.key));
 
 const RESULTS = {
-    sent: { icon: CircleCheckIcon, tone: 'text-emerald-400', text: 'Sent' },
-    already_there: { icon: CircleCheckIcon, tone: 'text-emerald-400', text: 'Up to date' },
-    retry: { icon: ClockIcon, tone: 'text-gold', text: 'Will try again' },
-    claimed: { icon: CircleAlertIcon, tone: 'text-wanted', text: 'Not synced' },
-    rejected: { icon: CircleAlertIcon, tone: 'text-wanted', text: 'Not synced' },
-    error: { icon: CircleAlertIcon, tone: 'text-wanted', text: 'Not synced' },
+    sent: { icon: CircleCheckIcon, tone: 'text-emerald-400', text: () => trans('Sent') },
+    already_there: { icon: CircleCheckIcon, tone: 'text-emerald-400', text: () => trans('Up to date') },
+    retry: { icon: ClockIcon, tone: 'text-gold', text: () => trans('Will try again') },
+    claimed: { icon: CircleAlertIcon, tone: 'text-wanted', text: () => trans('Not synced') },
+    rejected: { icon: CircleAlertIcon, tone: 'text-wanted', text: () => trans('Not synced') },
+    error: { icon: CircleAlertIcon, tone: 'text-wanted', text: () => trans('Not synced') },
 } as const;
 
 const result = computed(() =>
@@ -50,17 +51,18 @@ const result = computed(() =>
                     variant="outline"
                     class="rounded-none border-gold/40 text-[0.65rem] text-gold uppercase"
                 >
-                    Played last
+                    {{ $t('Played last') }}
                 </Badge>
             </div>
             <span class="text-xs text-muted-foreground">
                 <template v-if="character.result">
-                    {{ result?.text }} {{ ago(character.result.at) }}
+                    {{ result?.text() }} {{ ago(character.result.at) }}
                     <template v-if="character.result.records">
-                        · {{ character.result.records }} records
+                        ·
+                        {{ $t(':count records', { count: character.result.records }) }}
                     </template>
                 </template>
-                <template v-else>Nothing sent yet</template>
+                <template v-else>{{ $t('Nothing sent yet') }}</template>
             </span>
             <span
                 v-if="character.result?.message"

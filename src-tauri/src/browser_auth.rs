@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::config;
+use crate::{config, i18n};
 
 /// How long the app waits for the player to finish in the browser.
 pub const WAIT: Duration = Duration::from_secs(300);
@@ -54,7 +54,7 @@ impl Callback {
     pub async fn bind() -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .map_err(|e| format!("Could not open a local port for the sign in: {e}"))?;
+            .map_err(|e| i18n::tr("Could not open a local port for the sign in: :error", &[("error", &e.to_string())]))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         Ok(Self { listener, redirect_uri: format!("http://127.0.0.1:{port}/callback") })
     }
@@ -67,12 +67,12 @@ impl Callback {
                 continue;
             };
             let Some(query) = target.strip_prefix("/callback?") else {
-                respond(&mut socket, "404 Not Found", "Nothing here.").await;
+                respond(&mut socket, "404 Not Found", &i18n::t("Nothing here.")).await;
                 continue;
             };
             match parse_callback(query, state) {
                 Ok(code) => {
-                    respond(&mut socket, "200 OK", "You are signed in. You can close this tab and go back to HeadHunter Sync.").await;
+                    respond(&mut socket, "200 OK", &i18n::t("You are signed in. You can close this tab and go back to HeadHunter Sync.")).await;
                     return Ok(code);
                 }
                 Err(message) => {
@@ -101,12 +101,12 @@ fn parse_callback(query: &str, expected_state: &str) -> Result<String, String> {
     let url = reqwest::Url::parse(&format!("http://127.0.0.1/?{query}")).map_err(|e| e.to_string())?;
     let value = |key: &str| url.query_pairs().find(|(k, _)| k == key).map(|(_, v)| v.into_owned());
     if value("state").as_deref() != Some(expected_state) {
-        return Err("This sign in did not come from this app. Try again from HeadHunter Sync.".into());
+        return Err(i18n::t("This sign in did not come from this app. Try again from HeadHunter Sync."));
     }
     if value("error").is_some() {
-        return Err("Sign in was cancelled.".into());
+        return Err(i18n::t("Sign in was cancelled."));
     }
-    value("code").filter(|code| !code.is_empty()).ok_or_else(|| "The website sent no sign-in code.".into())
+    value("code").filter(|code| !code.is_empty()).ok_or_else(|| i18n::t("The website sent no sign-in code."))
 }
 
 /// The request target of "GET /callback?... HTTP/1.1".

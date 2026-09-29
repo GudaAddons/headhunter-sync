@@ -9,7 +9,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { CLIENT_LABELS, folderName } from '@/lib/format';
+import { clientLabel, folderName } from '@/lib/format';
+import { trans } from '@/lib/i18n';
 import type { InstallSettings, InstallStatus } from '@/types';
 
 const props = defineProps<{
@@ -23,22 +24,22 @@ const AUTO = 'auto';
 // The Forever beta runs in the US only (until release on 2026-11-04)
 const regions = computed(() =>
     props.install.client === 'forever'
-        ? [{ value: 'us', label: 'Americas & Oceania' }]
+        ? [{ value: 'us', label: trans('Americas & Oceania') }]
         : [
-              { value: 'us', label: 'Americas & Oceania' },
-              { value: 'eu', label: 'Europe' },
-              { value: 'kr', label: 'Korea' },
-              { value: 'tw', label: 'Taiwan' },
-              { value: 'cn', label: 'China' },
+              { value: 'us', label: trans('Americas & Oceania') },
+              { value: 'eu', label: trans('Europe') },
+              { value: 'kr', label: trans('Korea') },
+              { value: 'tw', label: trans('Taiwan') },
+              { value: 'cn', label: trans('China') },
           ],
 );
 
-const REALM_TYPES = [
-    { value: 'pvp', label: 'PvP' },
-    { value: 'pve', label: 'PvE' },
-    { value: 'roleplay', label: 'Roleplay' },
-    { value: 'hardcore', label: 'Hardcore' },
-];
+const realmTypes = computed(() => [
+    { value: 'pvp', label: trans('PvP') },
+    { value: 'pve', label: trans('PvE') },
+    { value: 'roleplay', label: trans('Roleplay') },
+    { value: 'hardcore', label: trans('Hardcore') },
+]);
 
 // The Forever beta has one region, so it shows as chosen instead of "From the addon"
 const isForever = computed(() => props.install.client === 'forever');
@@ -66,7 +67,7 @@ const realmType = computed({
                 @update:model-value="(v) => (options = { ...options, enabled: v === true })"
             />
             <span class="font-heading tracking-wide text-gold uppercase">
-                {{ CLIENT_LABELS[install.client] }}
+                {{ clientLabel(install.client) }}
             </span>
             <span class="truncate text-xs font-normal text-muted-foreground">
                 {{ folderName(install.path) }}
@@ -74,14 +75,14 @@ const realmType = computed({
         </Label>
         <div class="grid gap-3 sm:grid-cols-2">
             <div class="grid gap-1">
-                <span class="text-xs text-muted-foreground">Region</span>
+                <span class="text-xs text-muted-foreground">{{ $t('Region') }}</span>
                 <Select v-model="region" :disabled="!options.enabled">
-                    <SelectTrigger class="w-full bg-card/85" aria-label="Region">
+                    <SelectTrigger class="w-full bg-card/85" :aria-label="$t('Region')">
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                         <SelectItem v-if="!isForever" :value="AUTO">
-                            From the addon
+                            {{ $t('From the addon') }}
                         </SelectItem>
                         <SelectItem
                             v-for="option in regions"
@@ -94,14 +95,14 @@ const realmType = computed({
                 </Select>
             </div>
             <div v-if="install.client === 'forever'" class="grid gap-1">
-                <span class="text-xs text-muted-foreground">World</span>
+                <span class="text-xs text-muted-foreground">{{ $t('World') }}</span>
                 <Select v-model="realmType" :disabled="!options.enabled">
-                    <SelectTrigger class="w-full bg-card/85" aria-label="World">
+                    <SelectTrigger class="w-full bg-card/85" :aria-label="$t('World')">
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                         <SelectItem
-                            v-for="option in REALM_TYPES"
+                            v-for="option in realmTypes"
                             :key="option.value"
                             :value="option.value"
                         >

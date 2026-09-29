@@ -52,6 +52,7 @@ export function useSync() {
         syncNow: () => invoke('sync_now'),
         getSettings: () => invoke<Settings>('get_settings'),
         saveSettings: (settings: Settings) => invoke('save_settings', { settings }),
+        setSystemLanguage: (language: string) => invoke('set_system_language', { language }),
         recentUploads: () => invoke<UploadInfo[]>('recent_uploads'),
     };
 }

@@ -5,6 +5,7 @@ pub mod api;
 pub mod browser_auth;
 pub mod config;
 pub mod download;
+pub mod i18n;
 pub mod installs;
 pub mod lua;
 pub mod payload;
@@ -17,7 +18,7 @@ use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Listener, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Listener, Manager, State, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
@@ -55,13 +56,13 @@ async fn sign_in_with_browser(app: AppHandle, engine: Shared<'_>, pending: State
     let state = browser_auth::random_token();
     let device = sync::device_name();
     let url = browser_auth::connect_url(&pkce, &state, &callback.redirect_uri, &device);
-    app.opener().open_url(url, None::<&str>).map_err(|e| format!("Could not open the browser: {e}"))?;
+    app.opener().open_url(url, None::<&str>).map_err(|e| i18n::tr("Could not open the browser: :error", &[("error", &e.to_string())]))?;
 
     let code = tokio::select! {
         result = tokio::time::timeout(browser_auth::WAIT, callback.code(&state)) => {
-            result.map_err(|_| "The sign in took too long. Try again.".to_string())??
+            result.map_err(|_| i18n::t("The sign in took too long. Try again."))??
         }
-        _ = cancelled => return Err("Sign in was cancelled.".into()),
+        _ = cancelled => return Err(i18n::t("Sign in was cancelled.")),
     };
     show_window(&app);
     let (token, user) = engine.api().exchange(&code, &pkce.verifier, &callback.redirect_uri, &device).await?;
@@ -98,6 +99,14 @@ fn sync_now(engine: Shared<'_>) {
     engine.request(Duration::ZERO);
 }
 
+/// The window's language for the "auto" setting ("zh-CN" from the system).
+#[tauri::command]
+fn set_system_language(app: AppHandle, engine: Shared<'_>, language: String) {
+    if engine.set_system_language(&language) {
+        let _ = app.emit("status-changed", ());
+    }
+}
+
 #[tauri::command]
 fn get_settings(engine: Shared<'_>) -> Settings {
     engine.settings()
@@ -107,8 +116,11 @@ fn get_settings(engine: Shared<'_>) -> Settings {
 fn save_settings(app: AppHandle, engine: Shared<'_>, settings: Settings) -> Result<(), String> {
     let autostart = app.autolaunch();
     let result = if settings.start_with_system { autostart.enable() } else { autostart.disable() };
-    result.map_err(|e| format!("Could not change the start with the system: {e}"))?;
-    engine.save_settings(settings)
+    result.map_err(|e| i18n::tr("Could not change the start with the system: :error", &[("error", &e.to_string())]))?;
+    engine.save_settings(settings)?;
+    // The language may have changed: the tray and the window follow
+    let _ = app.emit("status-changed", ());
+    Ok(())
 }
 
 /// "Start with Windows" is on by default: a fresh install registers it on the first run.
@@ -126,7 +138,7 @@ fn apply_start_with_system(app: &AppHandle, engine: &Engine) {
 
 #[tauri::command]
 async fn recent_uploads(engine: Shared<'_>) -> Result<Vec<UploadInfo>, String> {
-    let token = store::token().ok_or("Sign in first.")?;
+    let token = store::token().ok_or_else(|| i18n::t("Sign in first."))?;
     engine.api().recent_uploads(&token).await
 }
 
@@ -148,23 +160,41 @@ fn show_window(app: &AppHandle) {
     }
 }
 
+/// The language of the tray menu, so it is built again when the language changes.
+#[derive(Default)]
+struct TrayLanguage(Mutex<&'static str>);
+
 fn refresh_tray(app: &AppHandle, engine: &Engine) {
     if let Some(tray) = app.tray_by_id("main") {
         let status = engine.status();
         let text = match (&status.user, status.syncing) {
-            (None, _) => "HeadHunter Sync: signed out".to_string(),
-            (Some(_), true) => "HeadHunter Sync: syncing...".to_string(),
-            (Some(user), false) => format!("HeadHunter Sync: {}", user.name),
+            (None, _) => i18n::t("HeadHunter Sync: signed out"),
+            (Some(_), true) => i18n::t("HeadHunter Sync: syncing..."),
+            (Some(user), false) => i18n::tr("HeadHunter Sync: :name", &[("name", &user.name)]),
         };
         let _ = tray.set_tooltip(Some(text));
+
+        let tray_language = app.state::<TrayLanguage>();
+        let mut language = tray_language.0.lock().unwrap();
+        if *language != i18n::current() {
+            if let Ok(menu) = tray_menu(app) {
+                let _ = tray.set_menu(Some(menu));
+                *language = i18n::current();
+            }
+        }
     }
 }
 
+fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let open = MenuItem::with_id(app, "open", i18n::t("Open HeadHunter Sync"), true, None::<&str>)?;
+    let sync = MenuItem::with_id(app, "sync", i18n::t("Sync now"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", i18n::t("Quit"), true, None::<&str>)?;
+    Menu::with_items(app, &[&open, &sync, &quit])
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open HeadHunter Sync", true, None::<&str>)?;
-    let sync = MenuItem::with_id(app, "sync", "Sync now", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &sync, &quit])?;
+    let menu = tray_menu(app)?;
+    *app.state::<TrayLanguage>().0.lock().unwrap() = i18n::current();
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().cloned().expect("app icon"))
@@ -201,6 +231,7 @@ pub fn run() {
             app.manage(Arc::clone(&engine));
             app.manage(BrowserSignIn::default());
             app.manage(updater::Pending::default());
+            app.manage(TrayLanguage::default());
             build_tray(app.handle())?;
             apply_start_with_system(app.handle(), &engine);
             engine.rewatch();
@@ -237,6 +268,7 @@ pub fn run() {
             sync_now,
             get_settings,
             save_settings,
+            set_system_language,
             recent_uploads,
             check_update,
             install_update

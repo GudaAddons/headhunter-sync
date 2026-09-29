@@ -24,13 +24,13 @@ const next = computed(() => soon(props.status.next_run_in));
                 <span
                     class="font-heading text-xs font-semibold tracking-[0.3em] text-gold uppercase"
                 >
-                    Last sync
+                    {{ $t('Last sync') }}
                 </span>
                 <span class="text-lg">
-                    {{ status.syncing ? 'Syncing now...' : ago(status.last_run) }}
+                    {{ status.syncing ? $t('Syncing now...') : ago(status.last_run) }}
                 </span>
                 <span v-if="next" class="text-xs text-muted-foreground">
-                    Next timed sync {{ next }}
+                    {{ $t('Next timed sync :time', { time: next }) }}
                 </span>
             </div>
             <Button
@@ -40,7 +40,7 @@ const next = computed(() => soon(props.status.next_run_in));
                 @click="emit('syncNow')"
             >
                 <RefreshCwIcon :class="{ 'animate-spin': status.syncing }" />
-                Sync now
+                {{ $t('Sync now') }}
             </Button>
         </div>
         <Alert v-if="status.problem" variant="destructive" class="bg-card/90">

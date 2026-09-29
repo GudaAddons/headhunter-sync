@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { ago } from '@/lib/format';
+import { trans } from '@/lib/i18n';
 import type { UploadInfo } from '@/types';
 
 const props = defineProps<{
@@ -10,11 +11,11 @@ const props = defineProps<{
 const uploads = ref<UploadInfo[]>([]);
 const error = ref<string | null>(null);
 
-const STATUS = {
-    pending: 'Waiting on the website',
-    parsed: 'On the board',
-    rejected: 'Refused',
-} as Record<string, string>;
+const STATUS: Record<string, () => string> = {
+    pending: () => trans('Waiting on the website'),
+    parsed: () => trans('On the board'),
+    rejected: () => trans('Refused'),
+};
 
 /** The list is newest first, so the first upload of each character is its latest. */
 function latestPerCharacter(list: UploadInfo[]): UploadInfo[] {
@@ -45,11 +46,11 @@ onMounted(async () => {
 <template>
     <section class="frame-gold flex flex-col gap-2 rounded-md bg-card/90 p-5">
         <h2 class="text-sm font-bold tracking-[0.2em] text-gold uppercase">
-            On the website
+            {{ $t('On the website') }}
         </h2>
         <p v-if="error" class="text-sm text-muted-foreground">{{ error }}</p>
         <p v-else-if="!uploads.length" class="text-sm text-muted-foreground">
-            No uploads yet.
+            {{ $t('No uploads yet.') }}
         </p>
         <ul v-else class="divide-y divide-border text-sm">
             <li
@@ -72,7 +73,7 @@ onMounted(async () => {
                     "
                     :title="upload.error ?? ''"
                 >
-                    {{ STATUS[upload.status] ?? upload.status }}
+                    {{ STATUS[upload.status]?.() ?? upload.status }}
                     <template v-if="sentAgo(upload)">
                         · {{ sentAgo(upload) }}
                     </template>

@@ -3,7 +3,7 @@ import { FolderIcon } from '@lucide/vue';
 import CharacterRow from '@/components/status/CharacterRow.vue';
 import GameDataLine from '@/components/status/GameDataLine.vue';
 import { Badge } from '@/components/ui/badge';
-import { CLIENT_LABELS, folderName } from '@/lib/format';
+import { clientLabel, folderName } from '@/lib/format';
 import type { InstallStatus } from '@/types';
 
 defineProps<{
@@ -17,7 +17,7 @@ defineProps<{
             <FolderIcon class="mt-1 size-5 shrink-0 text-gold" />
             <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                 <h2 class="font-bold tracking-wider text-gold uppercase">
-                    {{ CLIENT_LABELS[install.client] }}
+                    {{ clientLabel(install.client) }}
                 </h2>
                 <span
                     class="truncate text-xs text-muted-foreground"
@@ -27,7 +27,7 @@ defineProps<{
                     {{
                         install.addon_version
                             ? `HeadHunter ${install.addon_version}`
-                            : 'HeadHunter addon not installed'
+                            : $t('HeadHunter addon not installed')
                     }}
                 </span>
             </div>
@@ -36,7 +36,7 @@ defineProps<{
                 variant="secondary"
                 class="rounded-none"
             >
-                Off
+                {{ $t('Off') }}
             </Badge>
         </header>
 
@@ -46,8 +46,11 @@ defineProps<{
             v-if="!install.accounts.length"
             class="text-sm text-muted-foreground"
         >
-            No HeadHunter data yet. Play with the addon, then log out: the game
-            saves it then.
+            {{
+                $t(
+                    'No HeadHunter data yet. Play with the addon, then log out: the game saves it then.',
+                )
+            }}
         </p>
 
         <section
@@ -58,7 +61,7 @@ defineProps<{
             <span
                 class="text-[0.7rem] tracking-[0.25em] text-muted-foreground uppercase"
             >
-                Account {{ account.name }}
+                {{ $t('Account :name', { name: account.name }) }}
             </span>
             <p v-if="account.error" class="text-sm text-wanted">
                 {{ account.error }}
@@ -67,7 +70,7 @@ defineProps<{
                 v-else-if="!account.characters.length"
                 class="py-2 text-sm text-muted-foreground"
             >
-                Nothing to sync yet.
+                {{ $t('Nothing to sync yet.') }}
             </p>
             <ul v-else class="divide-y divide-border">
                 <CharacterRow

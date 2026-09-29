@@ -2,13 +2,14 @@
 import { FolderPlusIcon, XIcon } from '@lucide/vue';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
+import { trans } from '@/lib/i18n';
 
 const folders = defineModel<string[]>({ required: true });
 
 async function add(): Promise<void> {
     const picked = await open({
         directory: true,
-        title: 'Pick your World of Warcraft folder (or its _classic_era_ folder)',
+        title: trans('Pick your World of Warcraft folder (or its _classic_era_ folder)'),
     });
     if (typeof picked === 'string' && !folders.value.includes(picked)) {
         folders.value = [...folders.value, picked];
@@ -24,11 +25,14 @@ function remove(folder: string): void {
     <section class="flex flex-col gap-3">
         <div class="flex flex-col gap-0.5">
             <h3 class="text-sm font-bold tracking-[0.2em] text-gold uppercase">
-                World of Warcraft folder
+                {{ $t('World of Warcraft folder') }}
             </h3>
             <p class="text-xs text-muted-foreground">
-                Found on its own from the Battle.net install. If your game is
-                somewhere else, add its folder here.
+                {{
+                    $t(
+                        'Found on its own from the Battle.net install. If your game is somewhere else, add its folder here.',
+                    )
+                }}
             </p>
         </div>
         <ul v-if="folders.length" class="flex flex-col gap-1.5">
@@ -41,7 +45,7 @@ function remove(folder: string): void {
                 <Button
                     variant="ghost"
                     size="icon-sm"
-                    :aria-label="`Remove ${folder}`"
+                    :aria-label="$t('Remove :folder', { folder })"
                     @click="remove(folder)"
                 >
                     <XIcon />
@@ -50,7 +54,7 @@ function remove(folder: string): void {
         </ul>
         <Button variant="outline" class="self-start" @click="add">
             <FolderPlusIcon />
-            Add a WoW folder
+            {{ $t('Add a WoW folder') }}
         </Button>
     </section>
 </template>

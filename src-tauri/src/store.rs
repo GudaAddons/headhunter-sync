@@ -24,6 +24,10 @@ pub struct Settings {
     /// 0 = off.
     pub interval_minutes: u32,
     pub start_with_system: bool,
+    /// "auto" (the system's), "en" or "zh_CN".
+    pub language: String,
+    /// The system language the window last reported, for "auto" before the window loads.
+    pub system_language: Option<String>,
     /// Shown on the status screen; the token itself is in the credential store.
     pub user_name: Option<String>,
     pub email: Option<String>,
@@ -38,6 +42,8 @@ impl Default for Settings {
             sync_on_start: true,
             interval_minutes: 60,
             start_with_system: true,
+            language: crate::i18n::AUTO.into(),
+            system_language: None,
             user_name: None,
             email: None,
         }

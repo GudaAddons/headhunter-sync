@@ -27,10 +27,14 @@ const result = computed(() => RESULTS[props.download.outcome]);
         />
         <span>
             <template v-if="download.written_at">
-                Website data in game {{ ago(download.written_at) }} ·
-                {{ download.wanted }} WANTED
+                {{
+                    $t('Website data in game :time · :count WANTED', {
+                        time: ago(download.written_at),
+                        count: download.wanted,
+                    })
+                }}
             </template>
-            <template v-else>No website data in the game yet</template>
+            <template v-else>{{ $t('No website data in the game yet') }}</template>
             <template v-if="download.message">
                 · <span :class="result.tone">{{ download.message }}</span>
             </template>

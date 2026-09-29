@@ -43,16 +43,16 @@ async function signIn(): Promise<void> {
                 class="flex items-center justify-center gap-2 text-sm text-muted-foreground"
             >
                 <LoaderCircleIcon class="size-4 animate-spin text-gold" />
-                Finish signing in in your browser...
+                {{ $t('Finish signing in in your browser...') }}
             </p>
-            <Button variant="outline" size="lg" @click="cancel">Cancel</Button>
+            <Button variant="outline" size="lg" @click="cancel">{{ $t('Cancel') }}</Button>
         </template>
         <Button v-else variant="gold" size="lg" @click="signIn">
             <GlobeIcon />
-            Sign in with browser
+            {{ $t('Sign in with browser') }}
         </Button>
         <p class="text-center text-xs text-muted-foreground">
-            Also for accounts made with Battle.net, Discord or Google.
+            {{ $t('Also for accounts made with Battle.net, Discord or Google.') }}
         </p>
     </div>
 </template>

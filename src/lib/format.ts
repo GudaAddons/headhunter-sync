@@ -1,10 +1,12 @@
-const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+import { intlLocale, trans } from '@/lib/i18n';
+import type { Client } from '@/types';
 
 /** "3 minutes ago" from Unix seconds */
 export function ago(unixSeconds: number | null): string {
     if (!unixSeconds) {
-        return 'never';
+        return trans('never');
     }
+    const relative = new Intl.RelativeTimeFormat(intlLocale(), { numeric: 'auto' });
     const seconds = Math.round(unixSeconds - Date.now() / 1000);
     const steps: [Intl.RelativeTimeFormatUnit, number][] = [
         ['day', 86_400],
@@ -16,7 +18,7 @@ export function ago(unixSeconds: number | null): string {
             return relative.format(Math.round(seconds / size), unit);
         }
     }
-    return 'just now';
+    return trans('just now');
 }
 
 /** "in 42 min" */
@@ -25,7 +27,9 @@ export function soon(seconds: number | null): string | null {
         return null;
     }
     const minutes = Math.max(1, Math.round(seconds / 60));
-    return minutes >= 60 ? `in ${Math.round(minutes / 60)} h` : `in ${minutes} min`;
+    return minutes >= 60
+        ? trans('in :hours h', { hours: Math.round(minutes / 60) })
+        : trans('in :minutes min', { minutes });
 }
 
 /** "Name-Realm" shows as "Name" with the realm apart */
@@ -34,10 +38,9 @@ export function splitKey(key: string): { name: string; realm: string | null } {
     return at > 0 ? { name: key.slice(0, at), realm: key.slice(at + 1) } : { name: key, realm: null };
 }
 
-export const CLIENT_LABELS = {
-    era: 'Classic Era',
-    forever: 'WoW Forever (Beta)',
-} as const;
+export function clientLabel(client: Client): string {
+    return client === 'era' ? trans('Classic Era') : trans('WoW Forever (Beta)');
+}
 
 /** The last folder of a path, e.g. "_classic_era_" */
 export function folderName(path: string): string {

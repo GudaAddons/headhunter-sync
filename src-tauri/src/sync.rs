@@ -17,7 +17,7 @@ use crate::api::{Api, DownloadOutcome, UploadOutcome, User};
 use crate::installs::{self, Install};
 use crate::payload::{self, Client, Context};
 use crate::store::{self, DownloadResult, InstallSettings, Settings, State, SyncResult};
-use crate::{config, download, lua};
+use crate::{config, download, i18n, lua};
 
 /// Waits after a change so the game has finished writing the file.
 const SETTLE: Duration = Duration::from_secs(5);
@@ -55,6 +55,8 @@ pub struct Status {
     /// Seconds until the next timed sync, when the timer is on.
     pub next_run_in: Option<u64>,
     pub problem: Option<String>,
+    /// The language in use: "en" or "zh_CN".
+    pub language: &'static str,
     pub installs: Vec<InstallStatus>,
 }
 
@@ -88,6 +90,7 @@ pub struct CharacterStatus {
 impl Engine {
     pub fn new(data_dir: PathBuf) -> Arc<Self> {
         let settings: Settings = store::load(&data_dir.join("settings.json"));
+        i18n::set(i18n::resolve(&settings.language, settings.system_language.as_deref()));
         let state: State = store::load(&data_dir.join("state.json"));
         Arc::new(Self {
             data_dir,
@@ -112,10 +115,24 @@ impl Engine {
 
     pub fn save_settings(self: &Arc<Self>, settings: Settings) -> Result<(), String> {
         store::save(&self.data_dir.join("settings.json"), &settings).map_err(|e| e.to_string())?;
+        i18n::set(i18n::resolve(&settings.language, settings.system_language.as_deref()));
         *self.settings.lock().unwrap() = settings;
         self.plan_interval();
         self.rewatch();
         Ok(())
+    }
+
+    /// The window's system language, for the "auto" setting. True when it changed.
+    pub fn set_system_language(&self, language: &str) -> bool {
+        let mut settings = self.settings();
+        if settings.system_language.as_deref() == Some(language) {
+            return false;
+        }
+        settings.system_language = Some(language.to_string());
+        i18n::set(i18n::resolve(&settings.language, settings.system_language.as_deref()));
+        let _ = store::save(&self.data_dir.join("settings.json"), &settings);
+        *self.settings.lock().unwrap() = settings;
+        true
     }
 
     fn save_state(&self) {
@@ -218,6 +235,7 @@ impl Engine {
             last_run: state.last_run,
             next_run_in,
             problem: self.problem.lock().unwrap().clone(),
+            language: i18n::current(),
             installs,
         }
     }
@@ -258,7 +276,7 @@ impl Engine {
 
     async fn sync_all(self: &Arc<Self>, app: &AppHandle) -> Result<(), Retry> {
         let Some(token) = store::token() else {
-            return Err(Retry("Sign in to start syncing.".into()));
+            return Err(Retry(i18n::t("Sign in to start syncing.")));
         };
         let mut retry: Option<String> = None;
 
@@ -305,7 +323,7 @@ impl Engine {
                         UploadOutcome::AlreadyThere => ("already_there", None, true),
                         UploadOutcome::Claimed(m) => ("claimed", Some(m.clone()), false),
                         UploadOutcome::Rejected(m) => ("rejected", Some(m.clone()), false),
-                        UploadOutcome::SignedOut => ("error", Some("Signed out on the website. Sign in again.".to_string()), false),
+                        UploadOutcome::SignedOut => ("error", Some(i18n::t("Signed out on the website. Sign in again.")), false),
                         UploadOutcome::Retry(m) => ("retry", Some(m.clone()), false),
                     };
                     {
@@ -321,11 +339,11 @@ impl Engine {
                     match outcome {
                         UploadOutcome::SignedOut => {
                             self.signed_out();
-                            notify(app, "Signed out", "HeadHunter Sync was signed out on the website. Sign in again to keep syncing.");
-                            return Err(Retry("Signed out on the website. Sign in again.".into()));
+                            notify(app, &i18n::t("Signed out"), &i18n::t("HeadHunter Sync was signed out on the website. Sign in again to keep syncing."));
+                            return Err(Retry(i18n::t("Signed out on the website. Sign in again.")));
                         }
                         UploadOutcome::Claimed(m) | UploadOutcome::Rejected(m) => {
-                            notify(app, &format!("{} not synced", display_name(&upload.key)), &m);
+                            notify(app, &i18n::tr(":name not synced", &[("name", &display_name(&upload.key))]), &m);
                         }
                         UploadOutcome::Retry(m) => {
                             retry.get_or_insert(m);
@@ -340,8 +358,8 @@ impl Engine {
                 match self.download(&token, &install, &path, &worlds).await {
                     Err(DownloadStop::SignedOut) => {
                         self.signed_out();
-                        notify(app, "Signed out", "HeadHunter Sync was signed out on the website. Sign in again to keep syncing.");
-                        return Err(Retry("Signed out on the website. Sign in again.".into()));
+                        notify(app, &i18n::t("Signed out"), &i18n::t("HeadHunter Sync was signed out on the website. Sign in again to keep syncing."));
+                        return Err(Retry(i18n::t("Signed out on the website. Sign in again.")));
                     }
                     Err(DownloadStop::Retry(m)) => {
                         retry.get_or_insert(m);
@@ -392,7 +410,7 @@ impl Engine {
             DownloadOutcome::Unchanged => None,
             DownloadOutcome::SignedOut => {
                 result.outcome = "error".into();
-                result.message = Some("Signed out on the website. Sign in again.".into());
+                result.message = Some(i18n::t("Signed out on the website. Sign in again."));
                 Some(DownloadStop::SignedOut)
             }
             DownloadOutcome::Retry(m) => {
@@ -503,7 +521,8 @@ fn context(install: &Install, settings: &InstallSettings, known_servers: std::co
 }
 
 fn read_db(path: &std::path::Path) -> Result<serde_json::Value, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| i18n::tr("Cannot read :path: :error", &[("path", &path.display().to_string()), ("error", &e.to_string())]))?;
     lua::read_variable(&text, "HeadHunter_DB").map_err(|e| format!("{}: {e}", path.display()))
 }
 

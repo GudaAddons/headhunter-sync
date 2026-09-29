@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onMounted, watch } from 'vue';
 import SignInForm from '@/components/auth/SignInForm.vue';
 import AppFooter from '@/components/layout/AppFooter.vue';
 import AppHeader from '@/components/layout/AppHeader.vue';
@@ -9,9 +10,23 @@ import RecentUploads from '@/components/status/RecentUploads.vue';
 import SyncOverview from '@/components/status/SyncOverview.vue';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSync } from '@/composables/useSync';
+import { language, systemLanguage } from '@/lib/i18n';
 
 const sync = useSync();
 const { status } = sync;
+
+// The Rust side decides the language; "auto" needs the system's, which the window knows
+onMounted(() => void sync.setSystemLanguage(systemLanguage()));
+watch(
+    () => status.value?.language,
+    (value) => {
+        if (value) {
+            language.value = value;
+            document.documentElement.lang = value.replace('_', '-');
+        }
+    },
+    { immediate: true },
+);
 
 async function signOut(): Promise<void> {
     await sync.signOut();
@@ -44,8 +59,8 @@ async function signOut(): Promise<void> {
 
             <Tabs v-else default-value="status" class="gap-4">
                 <TabsList class="w-full">
-                    <TabsTrigger value="status">Status</TabsTrigger>
-                    <TabsTrigger value="settings">Settings</TabsTrigger>
+                    <TabsTrigger value="status">{{ $t('Status') }}</TabsTrigger>
+                    <TabsTrigger value="settings">{{ $t('Settings') }}</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="status" class="flex flex-col gap-4">
@@ -59,8 +74,11 @@ async function signOut(): Promise<void> {
                         v-if="!status.installs.length"
                         class="frame-gold rounded-md bg-card/90 p-5 text-sm"
                     >
-                        No Classic Era or WoW Forever folder found. Add your
-                        World of Warcraft folder in Settings.
+                        {{
+                            $t(
+                                'No Classic Era or WoW Forever folder found. Add your World of Warcraft folder in Settings.',
+                            )
+                        }}
                     </p>
                     <RecentUploads :load="sync.recentUploads" />
                 </TabsContent>

@@ -9,17 +9,18 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { trans } from '@/lib/i18n';
 import type { Settings } from '@/types';
 
 const settings = defineModel<Settings>({ required: true });
 
-const INTERVALS = [
-    { value: '0', label: 'Off' },
-    { value: '15', label: 'Every 15 minutes' },
-    { value: '30', label: 'Every 30 minutes' },
-    { value: '60', label: 'Every hour' },
-    { value: '180', label: 'Every 3 hours' },
-];
+const intervals = computed(() => [
+    { value: '0', label: trans('Off') },
+    { value: '15', label: trans('Every :count minutes', { count: 15 }) },
+    { value: '30', label: trans('Every :count minutes', { count: 30 }) },
+    { value: '60', label: trans('Every hour') },
+    { value: '180', label: trans('Every :count hours', { count: 3 }) },
+]);
 
 const interval = computed({
     get: () => String(settings.value.interval_minutes),
@@ -36,7 +37,7 @@ function toggle(key: 'sync_on_change' | 'sync_on_start' | 'start_with_system', v
 <template>
     <section class="flex flex-col gap-3">
         <h3 class="text-sm font-bold tracking-[0.2em] text-gold uppercase">
-            When to sync
+            {{ $t('When to sync') }}
         </h3>
         <Label class="flex items-start gap-2.5 font-normal">
             <Checkbox
@@ -44,9 +45,9 @@ function toggle(key: 'sync_on_change' | 'sync_on_start' | 'start_with_system', v
                 @update:model-value="(v) => toggle('sync_on_change', v)"
             />
             <span>
-                When the game saves
+                {{ $t('When the game saves') }}
                 <span class="block text-xs text-muted-foreground">
-                    At logout, /reload or quitting, a few seconds after.
+                    {{ $t('At logout, /reload or quitting, a few seconds after.') }}
                 </span>
             </span>
         </Label>
@@ -55,17 +56,17 @@ function toggle(key: 'sync_on_change' | 'sync_on_start' | 'start_with_system', v
                 :model-value="settings.sync_on_start"
                 @update:model-value="(v) => toggle('sync_on_start', v)"
             />
-            When HeadHunter Sync starts
+            {{ $t('When HeadHunter Sync starts') }}
         </Label>
         <div class="flex items-center gap-3">
-            <span class="text-sm">Also</span>
+            <span class="text-sm">{{ $t('Also') }}</span>
             <Select v-model="interval">
-                <SelectTrigger class="min-w-44 bg-card/85" aria-label="Timed sync">
+                <SelectTrigger class="min-w-44 bg-card/85" :aria-label="$t('Timed sync')">
                     <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                     <SelectItem
-                        v-for="option in INTERVALS"
+                        v-for="option in intervals"
                         :key="option.value"
                         :value="option.value"
                     >
@@ -79,7 +80,7 @@ function toggle(key: 'sync_on_change' | 'sync_on_start' | 'start_with_system', v
                 :model-value="settings.start_with_system"
                 @update:model-value="(v) => toggle('start_with_system', v)"
             />
-            Start with Windows (in the tray)
+            {{ $t('Start with Windows (in the tray)') }}
         </Label>
     </section>
 </template>

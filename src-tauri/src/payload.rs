@@ -272,7 +272,7 @@ pub struct CharacterUpload {
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum PayloadError {
-    #[error("Region unknown: log in to the game once with the addon, or pick the region in Settings")]
+    #[error("{}", crate::i18n::t("Region unknown: log in to the game once with the addon, or pick the region in Settings"))]
     UnknownRegion,
 }
 

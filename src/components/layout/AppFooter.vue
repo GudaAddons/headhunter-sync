@@ -18,7 +18,7 @@ const host = computed(() => props.apiUrl.replace(/^https?:\/\//, ''));
         <button
             type="button"
             class="cursor-pointer underline-offset-2 hover:text-gold hover:underline"
-            :title="`Open ${apiUrl}`"
+            :title="$t('Open :url', { url: apiUrl })"
             @click="openUrl(apiUrl)"
         >
             {{ host }}

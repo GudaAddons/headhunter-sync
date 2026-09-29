@@ -64,6 +64,8 @@ export type Status = {
     last_run: number | null;
     next_run_in: number | null;
     problem: string | null;
+    /** The language in use, decided on the Rust side: "en" or "zh_CN". */
+    language: string;
     installs: InstallStatus[];
 };
 
@@ -74,6 +76,9 @@ export type Settings = {
     sync_on_start: boolean;
     interval_minutes: number;
     start_with_system: boolean;
+    /** "auto" (the system's), "en" or "zh_CN" */
+    language: string;
+    system_language: string | null;
     user_name: string | null;
     email: string | null;
 };

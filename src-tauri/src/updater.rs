@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::config;
+use crate::{config, i18n};
 
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 
@@ -38,7 +38,7 @@ pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
         .map_err(|e| e.to_string())?
         .check()
         .await
-        .map_err(|e| format!("Could not check for updates: {e}"))?;
+        .map_err(|e| i18n::tr("Could not check for updates: :error", &[("error", &e.to_string())]))?;
     let info = update.as_ref().map(|u| UpdateInfo { version: u.version.clone(), notes: u.body.clone() });
     *app.state::<Pending>().0.lock().unwrap() = update;
     Ok(info)
@@ -46,11 +46,11 @@ pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
 
 /// Downloads and installs the waiting update, then restarts on the new version.
 pub async fn install(app: &AppHandle) -> Result<(), String> {
-    let update = app.state::<Pending>().0.lock().unwrap().take().ok_or("No update is waiting.")?;
+    let update = app.state::<Pending>().0.lock().unwrap().take().ok_or_else(|| i18n::t("No update is waiting."))?;
     update
         .download_and_install(|_, _| {}, || {})
         .await
-        .map_err(|e| format!("The update failed: {e}"))?;
+        .map_err(|e| i18n::tr("The update failed: :error", &[("error", &e.to_string())]))?;
     app.restart()
 }
 
@@ -69,7 +69,7 @@ pub fn start_checks(app: AppHandle) {
                         .notification()
                         .builder()
                         .title("HeadHunter Sync")
-                        .body(format!("Version {} is ready. Open the app to install it.", info.version))
+                        .body(i18n::tr("Version :version is ready. Open the app to install it.", &[("version", &info.version)]))
                         .show();
                     announced = Some(info.version);
                 }

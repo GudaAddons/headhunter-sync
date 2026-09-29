@@ -43,12 +43,15 @@ async function submit(): Promise<void> {
     <section class="frame-gold flex flex-col gap-5 rounded-md bg-card/90 p-6">
         <header class="flex flex-col items-center gap-2 text-center">
             <h1 class="text-xl font-bold tracking-[0.15em] text-gold uppercase">
-                Sign in
+                {{ $t('Sign in') }}
             </h1>
             <div class="divider-gold w-28" />
             <p class="text-sm text-muted-foreground">
-                Use your HeadHunter website account. Your reports ride to the
-                bounty board on their own after that.
+                {{
+                    $t(
+                        'Use your HeadHunter website account. Your reports ride to the bounty board on their own after that.',
+                    )
+                }}
             </p>
         </header>
 
@@ -62,7 +65,7 @@ async function submit(): Promise<void> {
             class="flex items-center gap-3 text-xs tracking-widest text-muted-foreground uppercase"
         >
             <span class="h-px flex-1 bg-border" />
-            or with email
+            {{ $t('or with email') }}
             <span class="h-px flex-1 bg-border" />
         </div>
 
@@ -73,7 +76,7 @@ async function submit(): Promise<void> {
 
         <form class="grid gap-4" @submit.prevent="submit">
             <div class="grid gap-1.5">
-                <Label for="email">Email</Label>
+                <Label for="email">{{ $t('Email') }}</Label>
                 <Input
                     id="email"
                     v-model="email"
@@ -83,7 +86,7 @@ async function submit(): Promise<void> {
                 />
             </div>
             <div class="grid gap-1.5">
-                <Label for="password">Password</Label>
+                <Label for="password">{{ $t('Password') }}</Label>
                 <Input
                     id="password"
                     v-model="password"
@@ -93,18 +96,18 @@ async function submit(): Promise<void> {
                 />
             </div>
             <Button type="submit" variant="outline" size="lg" :disabled="busy">
-                {{ busy ? 'Signing in...' : 'Sign in' }}
+                {{ busy ? $t('Signing in...') : $t('Sign in') }}
             </Button>
         </form>
 
         <p class="text-center text-sm text-muted-foreground">
-            No account yet?
+            {{ $t('No account yet?') }}
             <button
                 type="button"
                 class="text-gold hover:underline"
                 @click="openUrl(`${apiUrl}/register`)"
             >
-                Create one on the website
+                {{ $t('Create one on the website') }}
             </button>
         </p>
         <p class="text-center text-xs text-muted-foreground/70">{{ apiUrl }}</p>

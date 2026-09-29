@@ -48,11 +48,11 @@ const emit = defineEmits<{
                 variant="ghost"
                 size="sm"
                 class="text-stone-300 hover:text-gold"
-                title="Sign out"
+                :title="$t('Sign out')"
                 @click="emit('signOut')"
             >
                 <LogOutIcon />
-                Sign out
+                {{ $t('Sign out') }}
             </Button>
         </div>
     </header>

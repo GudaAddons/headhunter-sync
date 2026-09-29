@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config;
+use crate::{config, i18n};
 use crate::payload::Payload;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -79,11 +79,12 @@ impl Api {
             .http
             .post(config::api("auth/token"))
             .header("Accept", "application/json")
+            .header("Accept-Language", i18n::accept_language())
             .json(&serde_json::json!({ "email": email, "password": password, "device_name": device }))
             .send()
             .await
             .map_err(|e| offline_message(&e))?;
-        token_answer(response, "Check your email and password.").await
+        token_answer(response, &i18n::t("Check your email and password.")).await
     }
 
     /// "Sign in with browser": trades the website's single-use code for a device token.
@@ -92,11 +93,12 @@ impl Api {
             .http
             .post(config::api("auth/exchange"))
             .header("Accept", "application/json")
+            .header("Accept-Language", i18n::accept_language())
             .json(&serde_json::json!({ "code": code, "code_verifier": verifier, "redirect_uri": redirect_uri, "device_name": device }))
             .send()
             .await
             .map_err(|e| offline_message(&e))?;
-        token_answer(response, "The sign in expired. Try again.").await
+        token_answer(response, &i18n::t("The sign in expired. Try again.")).await
     }
 
     pub async fn sign_out(&self, token: &str) {
@@ -105,6 +107,7 @@ impl Api {
             .delete(config::api("auth/token"))
             .bearer_auth(token)
             .header("Accept", "application/json")
+            .header("Accept-Language", i18n::accept_language())
             .send()
             .await;
     }
@@ -115,6 +118,7 @@ impl Api {
             .post(config::api("sync/uploads"))
             .bearer_auth(token)
             .header("Accept", "application/json")
+            .header("Accept-Language", i18n::accept_language())
             .json(payload)
             .send()
             .await
@@ -128,10 +132,10 @@ impl Api {
             202 => UploadOutcome::Sent,
             200 => UploadOutcome::AlreadyThere,
             401 | 403 => UploadOutcome::SignedOut,
-            409 => UploadOutcome::Claimed(message(&body).unwrap_or_else(|| "This character is linked to another account.".into())),
-            422 => UploadOutcome::Rejected(first_error(&body).unwrap_or_else(|| "The website refused the data.".into())),
-            429 => UploadOutcome::Retry("The website asks to slow down; trying again soon.".into()),
-            _ => UploadOutcome::Retry(format!("The website answered {status}; trying again soon.")),
+            409 => UploadOutcome::Claimed(message(&body).unwrap_or_else(|| i18n::t("This character is linked to another account."))),
+            422 => UploadOutcome::Rejected(first_error(&body).unwrap_or_else(|| i18n::t("The website refused the data."))),
+            429 => UploadOutcome::Retry(i18n::t("The website asks to slow down; trying again soon.")),
+            _ => UploadOutcome::Retry(i18n::tr("The website answered :status; trying again soon.", &[("status", &status.to_string())])),
         }
     }
 
@@ -144,7 +148,8 @@ impl Api {
             .get(config::api("sync/download"))
             .query(&query)
             .bearer_auth(token)
-            .header("Accept", "application/json");
+            .header("Accept", "application/json")
+            .header("Accept-Language", i18n::accept_language());
         if let Some(etag) = etag {
             request = request.header("If-None-Match", etag);
         }
@@ -157,12 +162,12 @@ impl Api {
         match status {
             200 => match response.json::<Value>().await {
                 Ok(body) => DownloadOutcome::Fresh(body, etag),
-                Err(_) => DownloadOutcome::Retry("The website sent game data that could not be read.".into()),
+                Err(_) => DownloadOutcome::Retry(i18n::t("The website sent game data that could not be read.")),
             },
             304 => DownloadOutcome::Unchanged,
             401 | 403 => DownloadOutcome::SignedOut,
-            429 => DownloadOutcome::Retry("The website asks to slow down; trying again soon.".into()),
-            _ => DownloadOutcome::Retry(format!("The website answered {status} for the game data; trying again soon.")),
+            429 => DownloadOutcome::Retry(i18n::t("The website asks to slow down; trying again soon.")),
+            _ => DownloadOutcome::Retry(i18n::tr("The website answered :status for the game data; trying again soon.", &[("status", &status.to_string())])),
         }
     }
 
@@ -172,11 +177,12 @@ impl Api {
             .get(config::api("sync/uploads"))
             .bearer_auth(token)
             .header("Accept", "application/json")
+            .header("Accept-Language", i18n::accept_language())
             .send()
             .await
             .map_err(|e| offline_message(&e))?;
         if !response.status().is_success() {
-            return Err(format!("The website answered {}.", response.status().as_u16()));
+            return Err(i18n::tr("The website answered :status.", &[("status", &response.status().as_u16().to_string())]));
         }
         let body: Value = response.json().await.map_err(|e| e.to_string())?;
         Ok(body["data"]
@@ -191,12 +197,12 @@ async fn token_answer(response: reqwest::Response, refused: &str) -> Result<(Str
     let body: Value = response.json().await.unwrap_or(Value::Null);
     match status {
         200 | 201 => {
-            let token = body["token"].as_str().ok_or("The website sent no token.")?.to_string();
+            let token = body["token"].as_str().ok_or_else(|| i18n::t("The website sent no token."))?.to_string();
             Ok((token, user_from(&body["user"])))
         }
         422 => Err(first_error(&body).unwrap_or_else(|| refused.into())),
-        429 => Err("Too many tries. Wait a minute and try again.".into()),
-        _ => Err(format!("The website answered {status}. Try again later.")),
+        429 => Err(i18n::t("Too many tries. Wait a minute and try again.")),
+        _ => Err(i18n::tr("The website answered :status. Try again later.", &[("status", &status.to_string())])),
     }
 }
 
@@ -234,9 +240,9 @@ fn first_error(body: &Value) -> Option<String> {
 
 fn offline_message(e: &reqwest::Error) -> String {
     if e.is_timeout() {
-        "The website did not answer in time.".into()
+        i18n::t("The website did not answer in time.")
     } else if e.is_connect() {
-        format!("Cannot reach {}. Is it online?", config::API_URL)
+        i18n::tr("Cannot reach :url. Is it online?", &[("url", config::API_URL)])
     } else {
         e.to_string()
     }

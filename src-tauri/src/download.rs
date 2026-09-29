@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::installs;
-use crate::{lua, payload};
+use crate::{i18n, lua, payload};
 
 pub const FOLDER: &str = "HeadHunter_Data";
 pub const VARIABLE: &str = "HeadHunter_SiteData";
@@ -52,7 +52,7 @@ pub fn data_file(data: &Value) -> String {
 
 /// Writes the addon; returns false when the files already held this data.
 pub fn write(game: &Path, data: &Value) -> Result<bool, String> {
-    let dir = data_dir(game).ok_or("HeadHunter is not installed in this game folder.")?;
+    let dir = data_dir(game).ok_or_else(|| i18n::t("HeadHunter is not installed in this game folder."))?;
     let interface = installs::addon_toc(game)
         .and_then(|toc| installs::toc_field(&toc, "Interface"))
         .unwrap_or_else(|| FALLBACK_INTERFACE.to_string());
@@ -63,12 +63,12 @@ pub fn write(game: &Path, data: &Value) -> Result<bool, String> {
     if files.iter().all(|(path, text)| fs::read_to_string(path).is_ok_and(|old| &old == text)) {
         return Ok(false);
     }
-    fs::create_dir_all(&dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+    fs::create_dir_all(&dir).map_err(|e| i18n::tr("Cannot create :path: :error", &[("path", &dir.display().to_string()), ("error", &e.to_string())]))?;
     for (path, text) in files {
         let tmp = path.with_extension("tmp");
         fs::write(&tmp, text)
             .and_then(|_| fs::rename(&tmp, &path))
-            .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
+            .map_err(|e| i18n::tr("Cannot write :path: :error", &[("path", &path.display().to_string()), ("error", &e.to_string())]))?;
     }
     Ok(true)
 }

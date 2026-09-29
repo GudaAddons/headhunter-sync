@@ -2,6 +2,7 @@
 import { CircleCheckIcon } from '@lucide/vue';
 import { onMounted, ref } from 'vue';
 import InstallOptions from '@/components/settings/InstallOptions.vue';
+import LanguageSelect from '@/components/settings/LanguageSelect.vue';
 import SyncTiming from '@/components/settings/SyncTiming.vue';
 import WowFolders from '@/components/settings/WowFolders.vue';
 import { Button } from '@/components/ui/button';
@@ -75,22 +76,27 @@ async function submit(): Promise<void> {
             />
         </div>
         <p v-else class="text-sm text-wanted">
-            No Classic Era or WoW Forever folder found. Add your World of
-            Warcraft folder above.
+            {{
+                $t(
+                    'No Classic Era or WoW Forever folder found. Add your World of Warcraft folder above.',
+                )
+            }}
         </p>
         <Separator />
         <SyncTiming v-model="settings" />
+        <Separator />
+        <LanguageSelect v-model="settings.language" />
         <p v-if="error" class="text-sm text-wanted">{{ error }}</p>
         <div class="flex items-center gap-3">
             <Button variant="gold" :disabled="saving" @click="submit">
-                Save
+                {{ $t('Save') }}
             </Button>
             <span
                 v-if="saved"
                 class="flex items-center gap-1 text-sm text-emerald-400"
             >
                 <CircleCheckIcon class="size-4" />
-                Saved
+                {{ $t('Saved') }}
             </span>
         </div>
     </section>

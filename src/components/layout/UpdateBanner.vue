@@ -32,10 +32,7 @@ async function run(): Promise<void> {
         <div class="flex items-center gap-3">
             <DownloadIcon class="size-5 shrink-0 text-gold" />
             <p class="min-w-0 flex-1 text-sm">
-                <span class="font-heading font-semibold tracking-wide"
-                    >Version {{ update.version }}</span
-                >
-                is ready.
+                {{ $t('Version :version is ready.', { version: update.version }) }}
             </p>
             <Button
                 variant="gold"
@@ -44,7 +41,7 @@ async function run(): Promise<void> {
                 @click="run"
             >
                 <LoaderCircleIcon v-if="installing" class="animate-spin" />
-                {{ installing ? 'Installing...' : 'Install and restart' }}
+                {{ installing ? $t('Installing...') : $t('Install and restart') }}
             </Button>
         </div>
         <p
