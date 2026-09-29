@@ -33,6 +33,27 @@ const PLAYER_FIELD: &str = "player";
 const HOME_FIELD: &str = "home";
 /// Map names stay at the root in every schema.
 const ZONES_FIELD: &str = "zones";
+/// The game's faction on a character, an enemy entry or a duel ("Alliance" or "Horde").
+const FACTION_FIELD: &str = "faction";
+const ALLIANCE: &str = "alliance";
+const HORDE: &str = "horde";
+const FACTIONS: [&str; 2] = [ALLIANCE, HORDE];
+/// The addon's race tokens, the website's names and the faction the race tells
+/// (none when both factions can play it).
+const RACES: &[(&str, &str, Option<&str>)] = &[
+    ("Human", "human", Some(ALLIANCE)),
+    ("Dwarf", "dwarf", Some(ALLIANCE)),
+    ("NightElf", "night_elf", Some(ALLIANCE)),
+    ("Gnome", "gnome", Some(ALLIANCE)),
+    ("Draenei", "draenei", Some(ALLIANCE)),
+    ("Orc", "orc", Some(HORDE)),
+    ("Scourge", "undead", Some(HORDE)),
+    ("Undead", "undead", Some(HORDE)),
+    ("Tauren", "tauren", Some(HORDE)),
+    ("Troll", "troll", Some(HORDE)),
+    ("BloodElf", "blood_elf", Some(HORDE)),
+    ("Skyborne", "skyborne", None),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -503,7 +524,7 @@ fn character(db: &Value, key: &str, is_last: bool, client: Client, region: &str,
             Client::Era => None,
         },
         name,
-        faction: text(&snapshot["faction"]).map(|f| f.to_lowercase()).or_else(|| race.as_deref().and_then(faction_of_race)),
+        faction: player_faction(&snapshot[FACTION_FIELD], race.as_deref()),
         class: text(&snapshot["class"]).map(|c| c.to_lowercase()),
         race: race.as_deref().and_then(map_race),
         sex: int(&snapshot["sex"]).filter(|s| *s == 2 || *s == 3),
@@ -543,7 +564,7 @@ fn shared_death(d: &Value, client: Client) -> Option<SharedDeath> {
             name,
             realm,
             class: text(&d["victim"]["class"]).map(|c| c.to_lowercase()),
-            faction: race.as_deref().and_then(faction_of_race),
+            faction: player_faction(&d["victim"][FACTION_FIELD], race.as_deref()),
             race: race.as_deref().and_then(map_race),
         },
         death: death(d, client)?,
@@ -597,7 +618,7 @@ fn attacker(enemy: &Value, role: &str, client: Client) -> Option<Attacker> {
         level: level.filter(|l| (1..=100).contains(l)),
         class: text(&enemy["class"]).map(|c| c.to_lowercase()),
         race: race.as_deref().and_then(map_race),
-        faction: race.as_deref().and_then(faction_of_race),
+        faction: player_faction(&enemy[FACTION_FIELD], race.as_deref()),
         ..Attacker::default()
     };
     match text(&enemy["key"]) {
@@ -634,7 +655,7 @@ fn duel(d: &Value, client: Client) -> Option<Duel> {
             name,
             realm,
             class: text(&d[format!("{side}Class")]).map(|c| c.to_lowercase()),
-            faction: race.as_deref().and_then(faction_of_race),
+            faction: duelist_faction(&d[FACTION_FIELD], race.as_deref()),
             race: race.as_deref().and_then(map_race),
         })
     };
@@ -646,7 +667,7 @@ fn duel(d: &Value, client: Client) -> Option<Duel> {
         loser_level: int(&d["loserLevel"]).filter(|l| (1..=100).contains(l))?,
         map_id: int(&d["mapID"]).filter(|m| *m >= 1),
         retreat: flag(&d["retreat"]),
-        faction: text(&d["faction"]).map(|f| f.to_lowercase()).filter(|f| f == "horde" || f == "alliance"),
+        faction: faction(&d[FACTION_FIELD]),
     })
 }
 
@@ -737,31 +758,33 @@ pub fn split_key(key: &str, client: Client) -> (String, Option<String>) {
     }
 }
 
+fn race_entry(race: &str) -> Option<&'static (&'static str, &'static str, Option<&'static str>)> {
+    RACES.iter().find(|(token, _, _)| *token == race)
+}
+
 /// The addon's race tokens to the website's names.
 pub fn map_race(race: &str) -> Option<String> {
-    let mapped = match race {
-        "Human" => "human",
-        "Dwarf" => "dwarf",
-        "NightElf" => "night_elf",
-        "Gnome" => "gnome",
-        "Draenei" => "draenei",
-        "Orc" => "orc",
-        "Scourge" | "Undead" => "undead",
-        "Tauren" => "tauren",
-        "Troll" => "troll",
-        "BloodElf" => "blood_elf",
-        _ => return None,
-    };
-    Some(mapped.into())
+    race_entry(race).map(|(_, name, _)| name.to_string())
 }
 
 pub fn faction_of_race(race: &str) -> Option<String> {
-    let faction = match race {
-        "Human" | "Dwarf" | "NightElf" | "Gnome" | "Draenei" => "alliance",
-        "Orc" | "Scourge" | "Undead" | "Tauren" | "Troll" | "BloodElf" => "horde",
-        _ => return None,
-    };
-    Some(faction.into())
+    race_entry(race).and_then(|(_, _, faction)| faction.map(String::from))
+}
+
+/// The game's faction as the website names it; anything else is dropped.
+fn faction(v: &Value) -> Option<String> {
+    text(v).map(|f| f.to_lowercase()).filter(|f| FACTIONS.contains(&f.as_str()))
+}
+
+/// The faction the game gave, else the one the race tells.
+fn player_faction(given: &Value, race: Option<&str>) -> Option<String> {
+    faction(given).or_else(|| race.and_then(faction_of_race))
+}
+
+/// A duel names one faction for both sides and duels can cross factions, so the race
+/// wins; the duel's faction only when the race does not tell (Skyborne).
+fn duelist_faction(duel_faction: &Value, race: Option<&str>) -> Option<String> {
+    race.and_then(faction_of_race).or_else(|| faction(duel_faction))
 }
 
 fn map_outlaw_rank(rank: &str) -> Option<String> {
@@ -1018,6 +1041,41 @@ mod tests {
                   "killer": { "key": "Grim Tusk", "level": 12 }, "confidence": "exact", "classification": "normal" }
             ]
         })
+    }
+
+    #[test]
+    fn a_duelist_takes_the_faction_of_the_race_first() {
+        let d = json!({ "winner": "Troll Axe", "loser": "Wing Talon", "t": 100, "faction": "Alliance",
+            "winnerRace": "Troll", "loserRace": "Skyborne", "winnerLevel": 14, "loserLevel": 14 });
+        let duel = duel(&d, Client::Forever).unwrap();
+        assert_eq!(duel.winner.faction.as_deref(), Some("horde"), "a Troll is Horde, whatever the duel says");
+        assert_eq!(duel.loser.faction.as_deref(), Some("alliance"), "Skyborne: the duel's faction");
+    }
+
+    #[test]
+    fn skyborne_takes_the_faction_the_game_gave() {
+        let db = json!({
+            "meta": { "client": "forever", "player": { "key": "Wren Gale", "level": 14, "server": 4620, "race": "Skyborne", "faction": "Alliance" } },
+            "deaths": [
+                { "id": "Wren Gale:100", "t": 100, "victim": { "key": "Wren Gale", "level": 13, "race": "Skyborne" },
+                  "killer": { "key": "Storm Crest", "level": 15, "race": "Skyborne", "faction": "Horde" },
+                  "assists": [
+                      { "key": "Cloud Drifter", "level": 14, "race": "Skyborne" },
+                      { "key": "Bone Grinder", "level": 16, "race": "Troll" }
+                  ],
+                  "confidence": "exact", "classification": "normal" }
+            ]
+        });
+        let uploads = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        let wren = &by_key(&uploads, "Wren Gale").payload;
+        assert_eq!((wren.character.race.as_deref(), wren.character.faction.as_deref()), (Some("skyborne"), Some("alliance")));
+
+        let death = &wren.deaths[0];
+        assert_eq!(death.victim_race.as_deref(), Some("skyborne"));
+        let [killer, drifter, grinder] = &death.attackers[..] else { panic!("three attackers") };
+        assert_eq!((killer.race.as_deref(), killer.faction.as_deref()), (Some("skyborne"), Some("horde")));
+        assert_eq!((drifter.race.as_deref(), drifter.faction.as_deref()), (Some("skyborne"), None), "both factions play Skyborne");
+        assert_eq!((grinder.race.as_deref(), grinder.faction.as_deref()), (Some("troll"), Some("horde")), "the race still tells");
     }
 
     #[test]
