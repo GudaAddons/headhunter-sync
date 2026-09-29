@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { ago } from '@/lib/format';
 import type { UploadInfo } from '@/types';
 
 const props = defineProps<{
@@ -15,9 +16,26 @@ const STATUS = {
     rejected: 'Refused',
 } as Record<string, string>;
 
+/** The list is newest first, so the first upload of each character is its latest. */
+function latestPerCharacter(list: UploadInfo[]): UploadInfo[] {
+    const seen = new Set<string>();
+    return list.filter((upload) => {
+        const key = String(upload.character_id ?? upload.character);
+        if (seen.has(key)) {
+            return false;
+        }
+        seen.add(key);
+        return true;
+    });
+}
+
+function sentAgo(upload: UploadInfo): string {
+    return upload.created_at ? ago(Date.parse(upload.created_at) / 1000) : '';
+}
+
 onMounted(async () => {
     try {
-        uploads.value = (await props.load()).slice(0, 8);
+        uploads.value = latestPerCharacter(await props.load());
     } catch (e) {
         error.value = String(e);
     }
@@ -39,8 +57,14 @@ onMounted(async () => {
                 :key="upload.id"
                 class="flex items-center justify-between gap-3 py-1.5"
             >
-                <span class="truncate">{{ upload.character ?? '?' }}</span>
+                <span class="truncate">
+                    {{ upload.character ?? '?' }}
+                    <span v-if="upload.realm" class="text-muted-foreground">
+                        - {{ upload.realm }}
+                    </span>
+                </span>
                 <span
+                    class="shrink-0 text-right"
                     :class="
                         upload.status === 'rejected'
                             ? 'text-wanted'
@@ -49,6 +73,9 @@ onMounted(async () => {
                     :title="upload.error ?? ''"
                 >
                     {{ STATUS[upload.status] ?? upload.status }}
+                    <template v-if="sentAgo(upload)">
+                        · {{ sentAgo(upload) }}
+                    </template>
                 </span>
             </li>
         </ul>

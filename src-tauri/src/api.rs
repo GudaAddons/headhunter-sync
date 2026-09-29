@@ -47,6 +47,8 @@ pub struct UploadInfo {
     pub id: i64,
     pub status: String,
     pub character: Option<String>,
+    pub character_id: Option<i64>,
+    pub realm: Option<String>,
     pub created_at: Option<String>,
     pub error: Option<String>,
 }
@@ -210,6 +212,8 @@ fn upload_info(u: &Value) -> UploadInfo {
         id: u["id"].as_i64().unwrap_or_default(),
         status: u["status"].as_str().unwrap_or_default().to_string(),
         character: u["character"]["name"].as_str().map(String::from),
+        character_id: u["character"]["id"].as_i64(),
+        realm: u["character"]["realm"].as_str().map(String::from),
         created_at: u["created_at"].as_str().map(String::from),
         error: u["error"].as_str().map(String::from),
     }
@@ -258,7 +262,7 @@ mod tests {
 
     #[test]
     fn reads_an_upload_from_the_list() {
-        let info = upload_info(&json!({ "id": 7, "status": "parsed", "character": { "name": "Tess Rider" }, "created_at": "2026-09-25T10:00:00Z", "error": null }));
-        assert_eq!(info, UploadInfo { id: 7, status: "parsed".into(), character: Some("Tess Rider".into()), created_at: Some("2026-09-25T10:00:00Z".into()), error: None });
+        let info = upload_info(&json!({ "id": 7, "status": "parsed", "character": { "id": 3, "name": "Tess Rider", "realm": "Firemaw" }, "created_at": "2026-09-25T10:00:00Z", "error": null }));
+        assert_eq!(info, UploadInfo { id: 7, status: "parsed".into(), character: Some("Tess Rider".into()), character_id: Some(3), realm: Some("Firemaw".into()), created_at: Some("2026-09-25T10:00:00Z".into()), error: None });
     }
 }

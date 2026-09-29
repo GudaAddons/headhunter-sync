@@ -82,6 +82,8 @@ export type UploadInfo = {
     id: number;
     status: string;
     character: string | null;
+    character_id: number | null;
+    realm: string | null;
     created_at: string | null;
     error: string | null;
 };
