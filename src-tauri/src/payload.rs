@@ -22,6 +22,7 @@ pub const MAX_ZONES: usize = 200;
 pub const MAX_POSTERS: usize = 200;
 pub const MAX_PAYMENTS: usize = 500;
 pub const MAX_SHARED_DEATHS: usize = 500;
+pub const MAX_EVENT_RESULTS: usize = 200;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
 const SERVER_FIELD: &str = "server";
 pub const MIN_SERVER: i64 = 1;
@@ -91,6 +92,8 @@ pub struct Sent {
     pub payments: i64,
     #[serde(default)]
     pub shared_deaths: i64,
+    #[serde(default)]
+    pub event_results: i64,
     /// The Forever server sent last: a new one is sent even with no new records, so the
     /// website files the character under its server's realm type.
     #[serde(default)]
@@ -110,6 +113,22 @@ pub struct Payload {
     pub bounty_posters: Vec<BountyPoster>,
     pub bounty_payments: Vec<BountyPayment>,
     pub shared_deaths: Vec<SharedDeath>,
+    pub event_results: Vec<EventResult>,
+}
+
+/// A tournament match result the character confirmed in game as host or co-organizer
+/// (addon Tournament/Matches.lua); the website checks it is theirs to set.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct EventResult {
+    pub tournament: String,
+    pub round: i64,
+    pub r#match: i64,
+    pub entrant_a: String,
+    pub entrant_b: String,
+    pub wins_a: i64,
+    pub wins_b: i64,
+    pub forfeit: Option<String>,
+    pub t: i64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -411,6 +430,17 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         let shared_out: Vec<SharedDeath> = shared_src.iter().filter_map(|d| shared_death(d, client)).collect();
         after.shared_deaths = max_t(&shared_src, already.shared_deaths);
 
+        // Tournament results this character confirmed as an organizer (theirs only)
+        let results_src = newest_first_limited(
+            values(&db["eventResults"]).filter(|r| {
+                text(&r["origin"]).as_deref() == Some("local") && text(&r["organizer"]).as_deref() == Some(&key)
+            }),
+            already.event_results,
+            MAX_EVENT_RESULTS,
+        );
+        let event_results: Vec<EventResult> = results_src.iter().filter_map(|r| event_result(r)).collect();
+        after.event_results = max_t(&results_src, already.event_results);
+
         let new_server = character.server.is_some() && character.server != already.server;
         after.server = character.server.or(already.server);
 
@@ -423,6 +453,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             && zones.is_empty()
             && bounty_posters.is_empty()
             && bounty_payments.is_empty()
+            && event_results.is_empty()
         {
             continue;
         }
@@ -441,6 +472,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 bounty_posters,
                 bounty_payments,
                 shared_deaths: shared_out,
+                event_results,
             },
             sent_after: after,
         });
@@ -721,6 +753,20 @@ fn bounty_payment(p: &Value, client: Client) -> Option<BountyPayment> {
     })
 }
 
+fn event_result(r: &Value) -> Option<EventResult> {
+    Some(EventResult {
+        tournament: text(&r["tournament"])?,
+        round: int(&r["round"]).filter(|n| *n >= 1)?,
+        r#match: int(&r["match"]).filter(|n| *n >= 1)?,
+        entrant_a: text(&r["a"])?,
+        entrant_b: text(&r["b"])?,
+        wins_a: int(&r["winsA"]).unwrap_or(0),
+        wins_b: int(&r["winsB"]).unwrap_or(0),
+        forfeit: text(&r["forfeit"]).filter(|f| f == "a" || f == "b"),
+        t: int(&r["t"])?,
+    })
+}
+
 fn zone_list(db: &Value) -> Vec<Zone> {
     let Some(map) = db[ZONES_FIELD].as_object() else { return Vec::new() };
     let mut zones: Vec<Zone> = map
@@ -986,6 +1032,29 @@ mod tests {
         assert_eq!((pay.hunter.name.as_str(), pay.status.as_str(), pay.claimed_at, pay.t), ("Kestrel", "unpaid", 700, 800));
         assert_eq!((main.sent_after.posters, main.sent_after.payments), (600, 800));
         assert!(by_key(&uploads, "Alt-Firemaw").payload.bounty_posters.is_empty(), "only with the last character");
+    }
+
+    #[test]
+    fn sends_the_tournament_results_the_character_confirmed() {
+        let mut db = era_db();
+        db["eventResults"] = json!({
+            "gatebrawl:1:2": { "tournament": "gatebrawl", "round": 1, "match": 2, "a": "p1", "b": "p2", "winsA": 2, "winsB": 1,
+              "t": 900, "organizer": "Tessa-Firemaw", "origin": "local" },
+            "gatebrawl:1:3": { "tournament": "gatebrawl", "round": 1, "match": 3, "a": "p5", "b": "p6", "winsA": 0, "winsB": 0,
+              "forfeit": "b", "t": 950, "organizer": "Tessa-Firemaw", "origin": "local" },
+            "gatebrawl:1:4": { "tournament": "gatebrawl", "round": 1, "match": 4, "a": "p7", "b": "p8", "winsA": 2, "winsB": 0,
+              "t": 960, "organizer": "Other-Firemaw", "origin": "peer" }
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let main = by_key(&uploads, "Tessa-Firemaw");
+        assert_eq!(main.payload.event_results.len(), 2, "only our own, confirmed here");
+        let no_show = main.payload.event_results.iter().find(|r| r.r#match == 3).unwrap();
+        assert_eq!((no_show.forfeit.as_deref(), no_show.entrant_a.as_str()), (Some("b"), "p5"));
+        assert_eq!(main.sent_after.event_results, 950);
+        let json = serde_json::to_value(&main.payload).unwrap();
+        assert!(json["event_results"][0]["match"].is_number(), "sent as \"match\"");
+        let again = build(&db, &ctx(Client::Era), |_| main.sent_after.clone()).unwrap();
+        assert!(again.iter().find(|u| u.key == "Tessa-Firemaw").is_none_or(|u| u.payload.event_results.is_empty()), "not twice");
     }
 
     #[test]
