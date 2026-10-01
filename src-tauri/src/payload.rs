@@ -5,7 +5,8 @@
 //! bounty events their hunter (addon 0.1.4+). `meta.player` is the character played
 //! last; witnessed duels, learned zones, bounty events without a hunter, the deaths other
 //! HeadHunters shared and the players' bounty posters and payments (addon HH-118,
-//! 0.2.2+) go with it.
+//! 0.2.2+) go with it, and so do the enemies the addon saw up close (their sex, race and
+//! class fill in what the website does not know about them yet).
 //! Demo and simulated records are never sent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,6 +24,8 @@ pub const MAX_POSTERS: usize = 200;
 pub const MAX_PAYMENTS: usize = 500;
 pub const MAX_SHARED_DEATHS: usize = 500;
 pub const MAX_EVENT_RESULTS: usize = 200;
+/// The addon keeps at most 2000 enemies (its Core/Database.lua).
+pub const MAX_KNOWN_PLAYERS: usize = 2000;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
 const SERVER_FIELD: &str = "server";
 pub const MIN_SERVER: i64 = 1;
@@ -94,6 +97,9 @@ pub struct Sent {
     pub shared_deaths: i64,
     #[serde(default)]
     pub event_results: i64,
+    /// The newest enemy sighting sent (the addon's `enemies[].lastSeen`).
+    #[serde(default)]
+    pub known_players: i64,
     /// The Forever server sent last: a new one is sent even with no new records, so the
     /// website files the character under its server's realm type.
     #[serde(default)]
@@ -114,6 +120,10 @@ pub struct Payload {
     pub bounty_payments: Vec<BountyPayment>,
     pub shared_deaths: Vec<SharedDeath>,
     pub event_results: Vec<EventResult>,
+    /// The enemies the addon saw up close, newest sighting first: the website fills in
+    /// their sex, race and class on players it already has.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub known_players: Vec<PlayerRef>,
 }
 
 /// A tournament match result the character confirmed in game as host or co-organizer
@@ -446,6 +456,23 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         let event_results: Vec<EventResult> = results_src.iter().filter_map(|r| event_result(r)).collect();
         after.event_results = max_t(&results_src, already.event_results);
 
+        // The enemies seen since last time; and what a killer's record lacks, from them
+        let enemies = &db["enemies"];
+        let (known_players, known_src) = if is_last {
+            let src = newest_seen_limited(enemies, already.known_players, MAX_KNOWN_PLAYERS);
+            (src.iter().filter_map(|(key, e)| known_player(key, e, client)).collect(), src)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        after.known_players = known_src.iter().map(|(_, e)| int(&e["lastSeen"]).unwrap_or(0)).max().unwrap_or(0).max(already.known_players);
+        let mut deaths_out = deaths_out;
+        let mut shared_out = shared_out;
+        for death in deaths_out.iter_mut().chain(shared_out.iter_mut().map(|s| &mut s.death)) {
+            for attacker in death.attackers.iter_mut() {
+                fill_from_enemy(attacker, enemies, client);
+            }
+        }
+
         let new_server = character.server.is_some() && character.server != already.server;
         after.server = character.server.or(already.server);
 
@@ -459,6 +486,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             && bounty_posters.is_empty()
             && bounty_payments.is_empty()
             && event_results.is_empty()
+            && known_players.is_empty()
         {
             continue;
         }
@@ -478,6 +506,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 bounty_payments,
                 shared_deaths: shared_out,
                 event_results,
+                known_players,
             },
             sent_after: after,
         });
@@ -816,6 +845,56 @@ fn race_entry(race: &str) -> Option<&'static (&'static str, &'static str, Option
     RACES.iter().find(|(token, _, _)| *token == race)
 }
 
+/// The addon's enemies (key -> record) seen after `after`, newest first, at most `limit`.
+fn newest_seen_limited(enemies: &Value, after: i64, limit: usize) -> Vec<(String, Value)> {
+    let Some(map) = enemies.as_object() else { return Vec::new() };
+    let mut seen: Vec<(String, Value)> = map
+        .iter()
+        .filter(|(_, e)| int(&e["lastSeen"]).unwrap_or(0) > after)
+        .map(|(key, e)| (key.clone(), e.clone()))
+        .collect();
+    seen.sort_by_key(|(_, e)| std::cmp::Reverse(int(&e["lastSeen"]).unwrap_or(0)));
+    seen.truncate(limit);
+    seen
+}
+
+/// An enemy the addon saw, for the website to fill in what it lacks; only one with
+/// something to tell (sex, race or class).
+fn known_player(key: &str, enemy: &Value, client: Client) -> Option<PlayerRef> {
+    let (name, realm) = split_key(key, client);
+    let race = text(&enemy["race"]);
+    let player = PlayerRef {
+        name,
+        realm,
+        class: text(&enemy["class"]).map(|c| c.to_lowercase()),
+        faction: player_faction(&enemy[FACTION_FIELD], race.as_deref()),
+        race: race.as_deref().and_then(map_race),
+        sex: sex(&enemy["sex"]),
+    };
+    (player.sex.is_some() || player.race.is_some() || player.class.is_some()).then_some(player)
+}
+
+/// What a killer's or assist's record lacks (sex, race, class), from the addon's enemy
+/// record of that player: it may have seen them up close after the death.
+fn fill_from_enemy(attacker: &mut Attacker, enemies: &Value, client: Client) {
+    let Some(name) = attacker.name.as_ref() else { return };
+    let key = match (client, attacker.realm.as_ref()) {
+        (Client::Era, Some(realm)) => format!("{name}-{realm}"),
+        _ => name.clone(),
+    };
+    let enemy = &enemies[key.as_str()];
+    if !enemy.is_object() {
+        return;
+    }
+    attacker.sex = attacker.sex.or_else(|| sex(&enemy["sex"]));
+    if attacker.race.is_none() {
+        attacker.race = text(&enemy["race"]).as_deref().and_then(map_race);
+    }
+    if attacker.class.is_none() {
+        attacker.class = text(&enemy["class"]).map(|c| c.to_lowercase());
+    }
+}
+
 /// The game's sex as the website takes it: 2 male, 3 female, else nothing.
 fn sex(value: &Value) -> Option<i64> {
     int(value).filter(|s| *s == 2 || *s == 3)
@@ -1134,6 +1213,34 @@ mod tests {
         let duel = duel(&d, Client::Forever).unwrap();
         assert_eq!(duel.winner.faction.as_deref(), Some("horde"), "a Troll is Horde, whatever the duel says");
         assert_eq!(duel.loser.faction.as_deref(), Some("alliance"), "Skyborne: the duel's faction");
+    }
+
+    #[test]
+    fn sends_the_enemies_seen_up_close_and_fills_a_killer_from_them() {
+        let db = json!({
+            "meta": { "client": "forever", "player": { "key": "Wren Gale", "level": 14, "server": 4620, "race": "Human", "faction": "Alliance" } },
+            "deaths": [
+                { "id": "Wren Gale:100", "t": 100, "victim": { "key": "Wren Gale", "level": 13, "race": "Human" },
+                  "killer": { "key": "Sickgirl Fs", "level": 15 },
+                  "confidence": "exact", "classification": "normal" }
+            ],
+            "enemies": {
+                "Sickgirl Fs": { "key": "Sickgirl Fs", "class": "PRIEST", "race": "NightElf", "sex": 3, "faction": "Alliance", "lastSeen": 500 },
+                "Grim Reaver": { "key": "Grim Reaver", "class": "WARRIOR", "race": "Orc", "sex": 2, "lastSeen": 400 },
+                "Nobody Known": { "key": "Nobody Known", "lastSeen": 300 }
+            }
+        });
+        let uploads = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        let wren = &by_key(&uploads, "Wren Gale");
+        let killer = &wren.payload.deaths[0].attackers[0];
+        assert_eq!((killer.sex, killer.race.as_deref(), killer.class.as_deref()), (Some(3), Some("night_elf"), Some("priest")), "filled from the enemy record");
+
+        let known: Vec<(&str, Option<i64>)> = wren.payload.known_players.iter().map(|p| (p.name.as_str(), p.sex)).collect();
+        assert_eq!(known, vec![("Sickgirl Fs", Some(3)), ("Grim Reaver", Some(2))], "newest first, only enemies with something to tell");
+        assert_eq!(wren.sent_after.known_players, 500);
+
+        let later = build(&db, &ctx(Client::Forever), |_| wren.sent_after.clone()).unwrap();
+        assert!(later.is_empty(), "nothing new: no upload");
     }
 
     #[test]
