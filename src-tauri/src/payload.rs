@@ -166,6 +166,9 @@ pub struct PlayerRef {
     pub class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub race: Option<String>,
+    /// 2 male, 3 female (the game's UnitSex): the website shows the race icon of that gender.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sex: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -203,6 +206,8 @@ pub struct Attacker {
     pub class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub race: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sex: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faction: Option<String>,
 }
@@ -559,7 +564,7 @@ fn character(db: &Value, key: &str, is_last: bool, client: Client, region: &str,
         faction: player_faction(&snapshot[FACTION_FIELD], race.as_deref()),
         class: text(&snapshot["class"]).map(|c| c.to_lowercase()),
         race: race.as_deref().and_then(map_race),
-        sex: int(&snapshot["sex"]).filter(|s| *s == 2 || *s == 3),
+        sex: sex(&snapshot["sex"]),
         level: int(&snapshot["level"]).filter(|l| (1..=100).contains(l)),
         guild: text(&snapshot["guild"]).map(|g| g.chars().take(64).collect()),
     }
@@ -598,6 +603,7 @@ fn shared_death(d: &Value, client: Client) -> Option<SharedDeath> {
             class: text(&d["victim"]["class"]).map(|c| c.to_lowercase()),
             faction: player_faction(&d["victim"][FACTION_FIELD], race.as_deref()),
             race: race.as_deref().and_then(map_race),
+            sex: sex(&d["victim"]["sex"]),
         },
         death: death(d, client)?,
     })
@@ -650,6 +656,7 @@ fn attacker(enemy: &Value, role: &str, client: Client) -> Option<Attacker> {
         level: level.filter(|l| (1..=100).contains(l)),
         class: text(&enemy["class"]).map(|c| c.to_lowercase()),
         race: race.as_deref().and_then(map_race),
+        sex: sex(&enemy["sex"]),
         faction: player_faction(&enemy[FACTION_FIELD], race.as_deref()),
         ..Attacker::default()
     };
@@ -689,6 +696,7 @@ fn duel(d: &Value, client: Client) -> Option<Duel> {
             class: text(&d[format!("{side}Class")]).map(|c| c.to_lowercase()),
             faction: duelist_faction(&d[FACTION_FIELD], race.as_deref()),
             race: race.as_deref().and_then(map_race),
+            sex: sex(&d[format!("{side}Sex")]),
         })
     };
     Some(Duel {
@@ -808,6 +816,11 @@ fn race_entry(race: &str) -> Option<&'static (&'static str, &'static str, Option
     RACES.iter().find(|(token, _, _)| *token == race)
 }
 
+/// The game's sex as the website takes it: 2 male, 3 female, else nothing.
+fn sex(value: &Value) -> Option<i64> {
+    int(value).filter(|s| *s == 2 || *s == 3)
+}
+
 /// The addon's race tokens to the website's names.
 pub fn map_race(race: &str) -> Option<String> {
     race_entry(race).map(|(_, name, _)| name.to_string())
@@ -896,7 +909,7 @@ mod tests {
             },
             "deaths": [
                 { "id": "Tessa-Firemaw:100", "t": 100, "victim": { "key": "Tessa-Firemaw", "level": 41, "class": "PRIEST", "race": "Scourge" },
-                  "killer": { "key": "Brute-Firemaw", "level": -1, "class": "WARRIOR", "race": "Human" },
+                  "killer": { "key": "Brute-Firemaw", "level": -1, "class": "WARRIOR", "race": "Human", "sex": 3 },
                   "assists": [ { "name": "Sly", "guid": "Player-1-ABC", "level": 58, "class": "ROGUE", "race": "NightElf" } ],
                   "mapID": 1434, "x": 0.5, "y": 0.25, "confidence": "exact", "classification": "coward" },
                 { "id": "Alt-Firemaw:200", "t": 200, "victim": { "key": "Alt-Firemaw", "level": 20, "class": "MAGE", "race": "Troll" },
@@ -914,7 +927,7 @@ mod tests {
             },
             "duels": {
                 "A-Firemaw>B-Firemaw:120": { "winner": "A-Firemaw", "loser": "B-Firemaw", "t": 120, "faction": "Horde",
-                  "winnerClass": "SHAMAN", "winnerRace": "Orc", "winnerLevel": 40, "loserClass": "MAGE", "loserRace": "Troll", "loserLevel": 38, "mapID": 1413, "origin": "local", "retreat": true },
+                  "winnerClass": "SHAMAN", "winnerRace": "Orc", "winnerSex": 2, "winnerLevel": 40, "loserClass": "MAGE", "loserRace": "Troll", "loserLevel": 38, "mapID": 1413, "origin": "local", "retreat": true },
                 "C-Firemaw>D-Firemaw:130": { "winner": "C-Firemaw", "loser": "D-Firemaw", "t": 130, "winnerLevel": 40, "loserLevel": 40, "origin": "peer" },
                 "E-Firemaw>F-Firemaw:140": { "winner": "E-Firemaw", "loser": "F-Firemaw", "t": 140, "winnerLevel": 40, "loserLevel": 40, "origin": "local", "demo": true }
             },
@@ -973,6 +986,7 @@ mod tests {
         assert_eq!((killer.role.as_str(), killer.name.as_deref(), killer.realm.as_deref()), ("killer", Some("Brute"), Some("Firemaw")));
         assert!(killer.skull && killer.level.is_none());
         assert_eq!(killer.faction.as_deref(), Some("alliance"));
+        assert_eq!(killer.sex, Some(3), "the killer's sex, for the race icon by gender");
         let assist = &death.attackers[1];
         assert_eq!((assist.name.as_deref(), assist.given_name.as_deref(), assist.guid.as_deref()), (None, Some("Sly"), Some("Player-1-ABC")));
         assert_eq!(assist.race.as_deref(), Some("night_elf"));
@@ -980,6 +994,7 @@ mod tests {
         let duel = &main.duels[0];
         assert_eq!((duel.winner.name.as_str(), duel.winner.race.as_deref(), duel.faction.as_deref()), ("A", Some("orc"), Some("horde")));
         assert!(duel.retreat);
+        assert_eq!((duel.winner.sex, duel.loser.sex), (Some(2), None), "a sex the addon did not see stays out");
 
         let join = main.bounty_events.iter().find(|e| e.kind == "join").unwrap();
         assert_eq!(join.outlaw_rank.as_deref(), Some("most_wanted"));
