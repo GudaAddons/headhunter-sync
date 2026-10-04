@@ -63,9 +63,12 @@ pub struct Status {
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallStatus {
     pub path: String,
-    pub client: Client,
+    /// `None` until the addon saved data in this game.
+    pub client: Option<Client>,
     pub addon_version: Option<String>,
     pub settings: InstallSettings,
+    /// A beta game after the release: it never syncs again.
+    pub beta_ended: bool,
     pub accounts: Vec<AccountStatus>,
     /// The last download of the website's data into this game.
     pub download: Option<DownloadResult>,
@@ -213,6 +216,7 @@ impl Engine {
                 InstallStatus {
                     settings: self.install_settings(&install),
                     download: state.downloads.get(&path).cloned(),
+                    beta_ended: install.beta_ended(now()),
                     path,
                     client: install.client,
                     addon_version: install.addon_version.clone(),
@@ -282,7 +286,7 @@ impl Engine {
 
         for install in self.installs() {
             let install_settings = self.install_settings(&install);
-            if !install_settings.enabled {
+            if !install_settings.enabled || install.beta_ended(now()) {
                 continue;
             }
             let path = install.path.to_string_lossy().to_string();
@@ -489,7 +493,7 @@ impl Engine {
             }
         });
         let Ok(mut watcher) = watcher else { return };
-        for install in self.installs() {
+        for install in self.installs().into_iter().filter(|install| !install.beta_ended(now())) {
             for account in install.accounts {
                 if let Some(dir) = account.saved_file.parent() {
                     let _ = watcher.watch(dir, RecursiveMode::NonRecursive);
@@ -508,12 +512,12 @@ enum DownloadStop {
 }
 
 /// What the saved file cannot say: the region comes from the setting, else from the
-/// game's own config (`SET portal`); the addon's saved region still wins over both.
+/// game (`SET portal`, else its Battle.net branch); the addon's saved region still wins.
 /// Forever servers the website does not know yet take the install's realm type.
 fn context(install: &Install, settings: &InstallSettings, known_servers: std::collections::BTreeSet<i64>) -> Context {
     Context {
         client: install.client,
-        region: settings.region.clone().or_else(|| install.portal_region.clone()),
+        region: settings.region.clone().or_else(|| install.game_region.clone()),
         realm_type: settings.realm_type.clone(),
         known_servers,
         addon_version: install.addon_version.clone().unwrap_or_else(|| "unknown".into()),

@@ -21,18 +21,13 @@ const options = defineModel<InstallSettings>({ required: true });
 
 const AUTO = 'auto';
 
-// The Forever beta runs in the US only (until release on 2026-11-04)
-const regions = computed(() =>
-    props.install.client === 'forever'
-        ? [{ value: 'us', label: trans('Americas & Oceania') }]
-        : [
-              { value: 'us', label: trans('Americas & Oceania') },
-              { value: 'eu', label: trans('Europe') },
-              { value: 'kr', label: trans('Korea') },
-              { value: 'tw', label: trans('Taiwan') },
-              { value: 'cn', label: trans('China') },
-          ],
-);
+const regions = computed(() => [
+    { value: 'us', label: trans('Americas & Oceania') },
+    { value: 'eu', label: trans('Europe') },
+    { value: 'kr', label: trans('Korea') },
+    { value: 'tw', label: trans('Taiwan') },
+    { value: 'cn', label: trans('China') },
+]);
 
 const realmTypes = computed(() => [
     { value: 'pvp', label: trans('PvP') },
@@ -41,11 +36,8 @@ const realmTypes = computed(() => [
     { value: 'hardcore', label: trans('Hardcore') },
 ]);
 
-// The Forever beta has one region, so it shows as chosen instead of "From the addon"
-const isForever = computed(() => props.install.client === 'forever');
-
 const region = computed({
-    get: () => options.value.region ?? (isForever.value ? 'us' : AUTO),
+    get: () => options.value.region ?? AUTO,
     set: (value: string) => {
         options.value = { ...options.value, region: value === AUTO ? null : value };
     },
@@ -81,8 +73,8 @@ const realmType = computed({
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                        <SelectItem v-if="!isForever" :value="AUTO">
-                            {{ $t('From the addon') }}
+                        <SelectItem :value="AUTO">
+                            {{ $t('From the game') }}
                         </SelectItem>
                         <SelectItem
                             v-for="option in regions"

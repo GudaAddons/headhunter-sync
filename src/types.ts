@@ -48,9 +48,10 @@ export type DownloadResult = {
 
 export type InstallStatus = {
     path: string;
-    client: Client;
+    client: Client | null;
     addon_version: string | null;
     settings: InstallSettings;
+    beta_ended: boolean;
     accounts: AccountStatus[];
     download: DownloadResult | null;
 };

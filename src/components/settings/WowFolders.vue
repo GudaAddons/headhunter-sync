@@ -9,7 +9,7 @@ const folders = defineModel<string[]>({ required: true });
 async function add(): Promise<void> {
     const picked = await open({
         directory: true,
-        title: trans('Pick your World of Warcraft folder (or its _classic_era_ folder)'),
+        title: trans('Pick your World of Warcraft folder (or one of its game folders)'),
     });
     if (typeof picked === 'string' && !folders.value.includes(picked)) {
         folders.value = [...folders.value, picked];

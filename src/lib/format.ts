@@ -38,7 +38,11 @@ export function splitKey(key: string): { name: string; realm: string | null } {
     return at > 0 ? { name: key.slice(0, at), realm: key.slice(at + 1) } : { name: key, realm: null };
 }
 
-export function clientLabel(client: Client): string {
+export function clientLabel(client: Client | null): string {
+    if (client === null) {
+        return trans('Unknown game');
+    }
+
     return client === 'era' ? trans('Classic Era') : trans('WoW Forever (Beta)');
 }
 

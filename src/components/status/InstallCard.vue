@@ -32,7 +32,14 @@ defineProps<{
                 </span>
             </div>
             <Badge
-                v-if="!install.settings.enabled"
+                v-if="install.beta_ended"
+                variant="secondary"
+                class="rounded-none"
+            >
+                {{ $t('Beta ended') }}
+            </Badge>
+            <Badge
+                v-else-if="!install.settings.enabled"
                 variant="secondary"
                 class="rounded-none"
             >

@@ -69,9 +69,9 @@ pub enum Client {
 /// What the file does not say but the upload needs.
 #[derive(Debug, Clone)]
 pub struct Context {
-    /// From the install folder; `meta.client` wins when present.
-    pub client: Client,
-    /// Used when the addon has not saved `meta.region` yet.
+    /// The install's client (another saved file's `meta.client`); the file's own wins.
+    pub client: Option<Client>,
+    /// Used when the addon has not saved `meta.region` yet: the setting, else the game's region.
     pub region: Option<String>,
     /// Forever worlds (pvp, pve, roleplay, hardcore): the addon cannot tell.
     pub realm_type: String,
@@ -161,8 +161,9 @@ pub struct Character {
     pub sex: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<i64>,
+    /// `Some(None)` is sent as null: the character is in no guild (it left one).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild: Option<String>,
+    pub guild: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Default)]
@@ -308,15 +309,8 @@ pub struct CharacterUpload {
 pub enum PayloadError {
     #[error("{}", crate::i18n::t("Region unknown: log in to the game once with the addon, or pick the region in Settings"))]
     UnknownRegion,
-}
-
-/// The WoW Forever beta runs only in the US region (Americas & Oceania) until the
-/// release on 2026-11-04; Classic Era saves its region (addon 0.1.3+).
-fn default_region(client: Client) -> Option<&'static str> {
-    match client {
-        Client::Forever => Some("us"),
-        Client::Era => None,
-    }
+    #[error("{}", crate::i18n::t("Game unknown: log in to the game once with the addon"))]
+    UnknownClient,
 }
 
 /// One home of the saved file as a flat file: its tables, the root zones and the root
@@ -543,12 +537,9 @@ fn client_and_region(db: &Value, ctx: &Context) -> Result<(Client, String), Payl
     let client = match text(&db[META_FIELD]["client"]).as_deref() {
         Some("era") => Client::Era,
         Some("forever") => Client::Forever,
-        _ => ctx.client,
+        _ => ctx.client.ok_or(PayloadError::UnknownClient)?,
     };
-    let region = text(&db[META_FIELD]["region"])
-        .or_else(|| ctx.region.clone())
-        .or_else(|| default_region(client).map(String::from))
-        .ok_or(PayloadError::UnknownRegion)?;
+    let region = text(&db[META_FIELD]["region"]).or_else(|| ctx.region.clone()).ok_or(PayloadError::UnknownRegion)?;
     Ok((client, region))
 }
 
@@ -595,7 +586,12 @@ fn character(db: &Value, key: &str, is_last: bool, client: Client, region: &str,
         race: race.as_deref().and_then(map_race),
         sex: sex(&snapshot["sex"]),
         level: int(&snapshot["level"]).filter(|l| (1..=100).contains(l)),
-        guild: text(&snapshot["guild"]).map(|g| g.chars().take(64).collect()),
+        // The last character's own record (saved at logout) also tells "no guild" (null);
+        // a death's victim record only tells a guild it saw
+        guild: {
+            let guild = text(&snapshot["guild"]).map(|g| g.chars().take(64).collect());
+            if is_last { Some(guild) } else { guild.map(Some) }
+        },
     }
 }
 
@@ -976,7 +972,7 @@ mod tests {
     use serde_json::json;
 
     fn ctx(client: Client) -> Context {
-        Context { client, region: None, realm_type: "pvp".into(), known_servers: BTreeSet::new(), addon_version: "0.1.4".into() }
+        Context { client: Some(client), region: Some("us".into()), realm_type: "pvp".into(), known_servers: BTreeSet::new(), addon_version: "0.1.4".into() }
     }
 
     /// Made-up players only (never the author's characters).
@@ -1475,12 +1471,48 @@ mod tests {
     }
 
     #[test]
-    fn forever_defaults_to_the_us_region_and_era_needs_one() {
-        let db = json!({ "meta": { "player": { "key": "Tess Rider" } } });
-        let uploads = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
-        assert!(uploads.iter().all(|u| u.payload.character.region == "us"));
+    fn the_last_character_without_a_guild_says_so_others_say_nothing() {
+        let db = json!({
+            "meta": { "region": "eu", "client": "era", "player": { "key": "Tessa-Firemaw", "level": 42 } },
+            "deaths": [
+                { "id": "Alt-Firemaw:200", "t": 200, "victim": { "key": "Alt-Firemaw", "level": 20 },
+                  "killer": { "key": "Brute-Firemaw", "level": 30 }, "confidence": "exact", "classification": "normal" },
+                { "id": "Tessa-Firemaw:300", "t": 300, "victim": { "key": "Tessa-Firemaw", "level": 42 },
+                  "killer": { "key": "Brute-Firemaw", "level": 30 }, "confidence": "exact", "classification": "normal" }
+            ]
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let json = |key: &str| serde_json::to_value(&uploads.iter().find(|u| u.key == key).unwrap().payload.character).unwrap();
+        assert_eq!(json("Tessa-Firemaw")["guild"], Value::Null, "left the guild: null");
+        assert!(json("Tessa-Firemaw").as_object().unwrap().contains_key("guild"));
+        assert!(!json("Alt-Firemaw").as_object().unwrap().contains_key("guild"), "unknown: not sent");
 
+        let mut db = db;
+        db["meta"]["player"]["guild"] = json!("Night Watch");
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let tessa = uploads.iter().find(|u| u.key == "Tessa-Firemaw").unwrap();
+        assert_eq!(tessa.payload.character.guild, Some(Some("Night Watch".into())));
+    }
+
+    #[test]
+    fn the_saved_client_and_region_win_over_the_game() {
+        let db = json!({ "meta": { "client": "forever", "region": "cn", "player": { "key": "Tess Rider" } } });
+        let context = Context { client: None, region: Some("us".into()), ..ctx(Client::Era) };
+        let uploads = build(&db, &context, |_| Sent::default()).unwrap();
+        assert!(uploads.iter().all(|u| u.payload.character.client == Client::Forever && u.payload.character.region == "cn"));
+
+        let db = json!({ "meta": { "player": { "key": "Tess Rider" } } });
+        let context = Context { region: Some("cn".into()), ..ctx(Client::Forever) };
+        let uploads = build(&db, &context, |_| Sent::default()).unwrap();
+        assert!(uploads.iter().all(|u| u.payload.character.region == "cn"), "the game's region fills in a missing meta.region");
+    }
+
+    #[test]
+    fn needs_a_client_and_a_region() {
         let db = json!({ "meta": { "player": { "key": "Tess-Firemaw" } } });
-        assert_eq!(build(&db, &ctx(Client::Era), |_| Sent::default()), Err(PayloadError::UnknownRegion));
+        let context = Context { region: None, ..ctx(Client::Era) };
+        assert_eq!(build(&db, &context, |_| Sent::default()), Err(PayloadError::UnknownRegion));
+        let context = Context { client: None, ..ctx(Client::Era) };
+        assert_eq!(build(&db, &context, |_| Sent::default()), Err(PayloadError::UnknownClient));
     }
 }
