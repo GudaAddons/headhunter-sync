@@ -26,6 +26,7 @@ pub const MAX_SHARED_DEATHS: usize = 500;
 pub const MAX_EVENT_RESULTS: usize = 200;
 /// The addon keeps at most 2000 enemies (its Core/Database.lua).
 pub const MAX_KNOWN_PLAYERS: usize = 2000;
+pub const MAX_GLASSES: usize = 500;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
 const SERVER_FIELD: &str = "server";
 pub const MIN_SERVER: i64 = 1;
@@ -100,6 +101,9 @@ pub struct Sent {
     /// The newest enemy sighting sent (the addon's `enemies[].lastSeen`).
     #[serde(default)]
     pub known_players: i64,
+    /// The newest glass sent (the addon's `glasses[].t`).
+    #[serde(default)]
+    pub glasses: i64,
     /// The Forever server sent last: a new one is sent even with no new records, so the
     /// website files the character under its server's realm type.
     #[serde(default)]
@@ -124,6 +128,19 @@ pub struct Payload {
     /// their sex, race and class on players it already has.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub known_players: Vec<PlayerRef>,
+    /// Glasses raised to catches in game, ours and other HeadHunters' (the addon's
+    /// Sync/Glasses.lua): the website counts them with its own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub glasses: Vec<Glass>,
+}
+
+/// A glass raised to a catch: the catch is its outlaw and time, `by` who raised it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Glass {
+    pub outlaw: PlayerRef,
+    pub caught_at: i64,
+    pub by: PlayerRef,
+    pub t: i64,
 }
 
 /// A tournament match result the character confirmed in game as host or co-organizer
@@ -459,6 +476,19 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             (Vec::new(), Vec::new())
         };
         after.known_players = known_src.iter().map(|(_, e)| int(&e["lastSeen"]).unwrap_or(0)).max().unwrap_or(0).max(already.known_players);
+
+        // Glasses raised to catches, every HeadHunter's the addon knows, with the last character
+        let glasses_src = if is_last {
+            newest_first_limited(
+                values(&db["glasses"]).filter(|g| text(&g["origin"]).as_deref() != Some("website")),
+                already.glasses,
+                MAX_GLASSES,
+            )
+        } else {
+            Vec::new()
+        };
+        let glasses: Vec<Glass> = glasses_src.iter().filter_map(|g| glass(g, client)).collect();
+        after.glasses = max_t(&glasses_src, already.glasses);
         let mut deaths_out = deaths_out;
         let mut shared_out = shared_out;
         for death in deaths_out.iter_mut().chain(shared_out.iter_mut().map(|s| &mut s.death)) {
@@ -481,6 +511,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             && bounty_payments.is_empty()
             && event_results.is_empty()
             && known_players.is_empty()
+            && glasses.is_empty()
         {
             continue;
         }
@@ -501,6 +532,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 shared_deaths: shared_out,
                 event_results,
                 known_players,
+                glasses,
             },
             sent_after: after,
         });
@@ -823,6 +855,15 @@ fn newest_first_limited<'a>(records: impl Iterator<Item = &'a Value>, after: i64
     list.sort_by_key(|r| int(&r["t"]));
     list.truncate(limit);
     list
+}
+
+fn glass(g: &Value, client: Client) -> Option<Glass> {
+    Some(Glass {
+        outlaw: player_ref(&text(&g["outlaw"])?, client)?,
+        caught_at: int(&g["caughtAt"])?,
+        by: player_ref(&text(&g["by"])?, client)?,
+        t: int(&g["t"])?,
+    })
 }
 
 fn max_t(records: &[&Value], already: i64) -> i64 {
@@ -1468,6 +1509,28 @@ mod tests {
                 serde_json::to_string(p).unwrap().len()
             );
         }
+    }
+
+    #[test]
+    fn sends_the_glasses_raised_to_catches_once_with_the_last_character() {
+        let db = json!({
+            "meta": { "region": "us", "client": "forever", "player": { "key": "Tess Rider" } },
+            "glasses": {
+                "Grim Reaper:100:Rowan Ash": { "outlaw": "Grim Reaper", "caughtAt": 100, "t": 150, "by": "Rowan Ash", "origin": "peer" },
+                "Grim Reaper:100:Tess Rider": { "outlaw": "Grim Reaper", "caughtAt": 100, "t": 160, "by": "Tess Rider", "origin": "local" },
+                "Old Gank:50:Tess Rider": { "outlaw": "Old Gank", "caughtAt": 50, "t": 60, "by": "Tess Rider", "origin": "website" }
+            }
+        });
+        let uploads = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        let glasses = &uploads[0].payload.glasses;
+        assert_eq!(glasses.len(), 2, "ours and a peer's, never one the website sent");
+        assert_eq!(glasses[0].outlaw.name, "Grim Reaper");
+        assert_eq!(glasses[0].caught_at, 100);
+        assert_eq!(glasses[0].by.name, "Rowan Ash");
+        assert_eq!(uploads[0].sent_after.glasses, 160);
+
+        let later = build(&db, &ctx(Client::Forever), |_| uploads[0].sent_after.clone()).unwrap();
+        assert!(later.iter().all(|u| u.payload.glasses.is_empty()), "sent once");
     }
 
     #[test]
