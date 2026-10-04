@@ -141,6 +141,10 @@ pub struct Glass {
     pub caught_at: i64,
     pub by: PlayerRef,
     pub t: i64,
+    /// Raised from the popup at the moment of the bust: the only glasses the Barflies
+    /// ranking counts.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub popup: bool,
 }
 
 /// A tournament match result the character confirmed in game as host or co-organizer
@@ -863,6 +867,7 @@ fn glass(g: &Value, client: Client) -> Option<Glass> {
         caught_at: int(&g["caughtAt"])?,
         by: player_ref(&text(&g["by"])?, client)?,
         t: int(&g["t"])?,
+        popup: g["popup"].as_bool().unwrap_or(false),
     })
 }
 
@@ -1517,7 +1522,7 @@ mod tests {
             "meta": { "region": "us", "client": "forever", "player": { "key": "Tess Rider" } },
             "glasses": {
                 "Grim Reaper:100:Rowan Ash": { "outlaw": "Grim Reaper", "caughtAt": 100, "t": 150, "by": "Rowan Ash", "origin": "peer" },
-                "Grim Reaper:100:Tess Rider": { "outlaw": "Grim Reaper", "caughtAt": 100, "t": 160, "by": "Tess Rider", "origin": "local" },
+                "Grim Reaper:100:Tess Rider": { "outlaw": "Grim Reaper", "caughtAt": 100, "t": 160, "by": "Tess Rider", "origin": "local", "popup": true },
                 "Old Gank:50:Tess Rider": { "outlaw": "Old Gank", "caughtAt": 50, "t": 60, "by": "Tess Rider", "origin": "website" }
             }
         });
@@ -1527,6 +1532,10 @@ mod tests {
         assert_eq!(glasses[0].outlaw.name, "Grim Reaper");
         assert_eq!(glasses[0].caught_at, 100);
         assert_eq!(glasses[0].by.name, "Rowan Ash");
+        assert!(!glasses[0].popup, "from the list");
+        assert!(glasses[1].popup, "from the popup");
+        assert_eq!(serde_json::to_value(&glasses[1]).unwrap()["popup"], true);
+        assert!(serde_json::to_value(&glasses[0]).unwrap().get("popup").is_none(), "only sent when true");
         assert_eq!(uploads[0].sent_after.glasses, 160);
 
         let later = build(&db, &ctx(Client::Forever), |_| uploads[0].sent_after.clone()).unwrap();
