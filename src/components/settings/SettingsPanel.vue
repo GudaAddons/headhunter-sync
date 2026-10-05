@@ -3,6 +3,7 @@ import { CircleCheckIcon } from '@lucide/vue';
 import { onMounted, ref } from 'vue';
 import InstallOptions from '@/components/settings/InstallOptions.vue';
 import LanguageSelect from '@/components/settings/LanguageSelect.vue';
+import ScreenshotOptions from '@/components/settings/ScreenshotOptions.vue';
 import SyncTiming from '@/components/settings/SyncTiming.vue';
 import WowFolders from '@/components/settings/WowFolders.vue';
 import { Button } from '@/components/ui/button';
@@ -84,6 +85,8 @@ async function submit(): Promise<void> {
         </p>
         <Separator />
         <SyncTiming v-model="settings" />
+        <Separator />
+        <ScreenshotOptions v-model="settings.delete_screenshots" />
         <Separator />
         <LanguageSelect v-model="settings.language" />
         <p v-if="error" class="text-sm text-wanted">{{ error }}</p>

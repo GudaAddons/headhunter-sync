@@ -9,6 +9,7 @@ pub mod i18n;
 pub mod installs;
 pub mod lua;
 pub mod payload;
+pub mod screenshots;
 pub mod store;
 pub mod sync;
 pub mod updater;

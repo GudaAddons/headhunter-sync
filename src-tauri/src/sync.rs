@@ -3,6 +3,7 @@
 //! Runs when the game writes the file (after it settles), at start, on a timer and on
 //! "Sync now"; retries later when the website cannot be reached.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,10 +14,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::api::{Api, DownloadOutcome, UploadOutcome, User};
+use crate::api::{Api, DownloadOutcome, ScreenshotOutcome, UploadOutcome, User};
 use crate::installs::{self, Install};
 use crate::payload::{self, Client, Context};
 use crate::store::{self, DownloadResult, InstallSettings, Settings, State, SyncResult};
+use crate::screenshots::{self, Shot};
 use crate::{config, download, i18n, lua};
 
 /// Waits after a change so the game has finished writing the file.
@@ -335,7 +337,7 @@ impl Engine {
                         if keep {
                             state.sent.insert(key.clone(), upload.sent_after.clone());
                         }
-                        state.results.insert(key, SyncResult { at: now(), outcome: name.into(), message: message.clone(), records });
+                        state.results.insert(key, SyncResult { at: now(), outcome: name.into(), message: message.clone(), records, screenshots: 0 });
                     }
                     self.save_state();
                     let _ = app.emit("status-changed", ());
@@ -355,6 +357,14 @@ impl Engine {
                         _ => {}
                     }
                 }
+
+                // After the records, so the website knows the deaths and catches they show
+                if self.send_screenshots(&token, &install, &path, &account.name, &db, &context, &mut retry).await.is_err() {
+                    self.signed_out();
+                    notify(app, &i18n::t("Signed out"), &i18n::t("HeadHunter Sync was signed out on the website. Sign in again to keep syncing."));
+                    return Err(Retry(i18n::t("Signed out on the website. Sign in again.")));
+                }
+                let _ = app.emit("status-changed", ());
             }
 
             if install.addon_version.is_some() && !worlds.is_empty() {
@@ -376,6 +386,94 @@ impl Engine {
         match retry {
             Some(message) => Err(Retry(message)),
             None => Ok(()),
+        }
+    }
+
+    /// Uploads the screenshots of one account's homes (screenshots.rs) and moves each
+    /// character's screenshot watermark. Err when the website signed the app out.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_screenshots(
+        &self,
+        token: &str,
+        install: &Install,
+        path: &str,
+        account: &str,
+        db: &serde_json::Value,
+        context: &Context,
+        retry: &mut Option<String>,
+    ) -> Result<(), SignedOut> {
+        let dir = screenshots::folder(&install.path);
+        for home in payload::homes(db) {
+            let state_key = |key: &str| store::state_key(path, account, home.key.as_deref(), key);
+            let sent = self.state.lock().unwrap().sent.clone();
+            let Ok(shots) = screenshots::pending(&home.db, context, |key| sent.get(&state_key(key)).cloned().unwrap_or_default()) else {
+                continue;
+            };
+            let mut waiting: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+            let mut uploaded: BTreeMap<String, usize> = BTreeMap::new();
+            for shot in shots {
+                let waits = waiting.entry(shot.hunter.clone()).or_default();
+                match self.send_screenshot(token, &dir, &shot).await {
+                    Handled::Uploaded => *uploaded.entry(shot.hunter.clone()).or_default() += 1,
+                    Handled::Done => {}
+                    Handled::Waiting(message) => {
+                        if let Some(message) = message {
+                            retry.get_or_insert(message);
+                        }
+                        waits.push(shot.t);
+                        continue;
+                    }
+                    Handled::SignedOut => return Err(SignedOut),
+                }
+                let mut state = self.state.lock().unwrap();
+                screenshots::advance(state.sent.entry(state_key(&shot.hunter)).or_default(), [shot.t], waits);
+            }
+            {
+                let mut state = self.state.lock().unwrap();
+                for (hunter, count) in uploaded {
+                    let result = state.results.entry(state_key(&hunter)).or_insert_with(|| SyncResult {
+                        at: now(),
+                        outcome: "sent".into(),
+                        message: None,
+                        records: 0,
+                        screenshots: 0,
+                    });
+                    result.screenshots = count;
+                }
+            }
+            self.save_state();
+        }
+        Ok(())
+    }
+
+    async fn send_screenshot(&self, token: &str, dir: &std::path::Path, shot: &Shot) -> Handled {
+        if now() - shot.t > screenshots::MAX_AGE_SECONDS {
+            return Handled::Done;
+        }
+        let uploaded = self.state.lock().unwrap().uploaded_screenshots.clone();
+        // The game may not have written it yet: try next time
+        let Some(file) = screenshots::find(dir, &shot.file, &uploaded) else {
+            return Handled::Waiting(None);
+        };
+        let source = file.clone();
+        let Ok(Ok(picture)) = tauri::async_runtime::spawn_blocking(move || screenshots::to_webp(&source)).await else {
+            return Handled::Waiting(None);
+        };
+        match self.api.upload_screenshot(token, screenshots::fields(shot), screenshots::upload_name(shot), picture).await {
+            ScreenshotOutcome::Saved => {
+                let uploaded = {
+                    let mut state = self.state.lock().unwrap();
+                    screenshots::remember(&mut state.uploaded_screenshots, &file);
+                    state.uploaded_screenshots.clone()
+                };
+                self.save_state();
+                screenshots::delete_uploaded(&file, &uploaded, self.settings().delete_screenshots);
+                Handled::Uploaded
+            }
+            // The website will never take it; the file stays for the player
+            ScreenshotOutcome::Refused(_) => Handled::Done,
+            ScreenshotOutcome::SignedOut => Handled::SignedOut,
+            ScreenshotOutcome::Retry(message) => Handled::Waiting(Some(message)),
         }
     }
 
@@ -505,6 +603,18 @@ impl Engine {
 }
 
 struct Retry(String);
+
+struct SignedOut;
+
+/// What became of one screenshot in this sync.
+enum Handled {
+    Uploaded,
+    /// Refused by the website or too old: never tried again.
+    Done,
+    /// No file yet, or the website could not take it now (the message says why).
+    Waiting(Option<String>),
+    SignedOut,
+}
 
 enum DownloadStop {
     SignedOut,

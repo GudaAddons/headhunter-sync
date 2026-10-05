@@ -17,6 +17,7 @@ export type SyncResult = {
     outcome: 'sent' | 'already_there' | 'claimed' | 'rejected' | 'retry' | 'error';
     message: string | null;
     records: number;
+    screenshots: number;
 };
 
 export type InstallSettings = {
@@ -77,6 +78,7 @@ export type Settings = {
     sync_on_start: boolean;
     interval_minutes: number;
     start_with_system: boolean;
+    delete_screenshots: boolean;
     /** "auto" (the system's), "en" or "zh_CN" */
     language: string;
     system_language: string | null;

@@ -24,6 +24,8 @@ pub struct Settings {
     /// 0 = off.
     pub interval_minutes: u32,
     pub start_with_system: bool,
+    /// Deletes a screenshot HeadHunter took once the website has it.
+    pub delete_screenshots: bool,
     /// "auto" (the system's), "en" or "zh_CN".
     pub language: String,
     /// The system language the window last reported, for "auto" before the window loads.
@@ -42,6 +44,7 @@ impl Default for Settings {
             sync_on_start: true,
             interval_minutes: 60,
             start_with_system: true,
+            delete_screenshots: true,
             language: crate::i18n::AUTO.into(),
             system_language: None,
             user_name: None,
@@ -76,6 +79,9 @@ pub struct State {
     pub last_run: Option<i64>,
     /// Install folder -> the last download of the website's data into the game.
     pub downloads: BTreeMap<String, DownloadResult>,
+    /// The screenshot files uploaded last (full paths, newest last), so none is sent or
+    /// deleted twice.
+    pub uploaded_screenshots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -98,6 +104,9 @@ pub struct SyncResult {
     pub outcome: String,
     pub message: Option<String>,
     pub records: usize,
+    /// Screenshots uploaded in the last sync.
+    #[serde(default)]
+    pub screenshots: usize,
 }
 
 /// An old flat file has no home, so its key stays as before and its state is kept.

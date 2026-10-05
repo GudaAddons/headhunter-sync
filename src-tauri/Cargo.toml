@@ -32,11 +32,14 @@ notify = "8.2.0"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["time", "sync", "macros", "net", "io-util"] }
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 sha2 = "0.11.0"
 base64 = "0.23.1"
 rand = "0.10.3"
 tauri-plugin-updater = "2.12.0"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tga"] }
+# The image crate only writes lossless WebP; this one wraps libwebp for lossy pictures
+webp = { version = "0.3", default-features = false }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

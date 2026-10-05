@@ -108,6 +108,13 @@ pub struct Sent {
     /// website files the character under its server's realm type.
     #[serde(default)]
     pub server: Option<i64>,
+    /// The newest screenshot handled (the addon's `screenshots.shots[].t`): it and every
+    /// older one was uploaded, refused by the website or too old.
+    #[serde(default)]
+    pub screenshots: i64,
+    /// Screenshots handled after an older one that still waits for its file.
+    #[serde(default)]
+    pub screenshots_done: BTreeSet<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -559,22 +566,34 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
 /// The world key of every character in the file, as the website's download takes it:
 /// "era|eu|Firemaw", "forever|us|4620" for a server the website knows, else "forever|us|pvp".
 pub fn world_keys(db: &Value, ctx: &Context) -> Result<BTreeSet<String>, PayloadError> {
-    let (client, region) = client_and_region(db, ctx)?;
-    let deaths = own_deaths(db);
-    let (keys, last_player) = character_keys(db, &deaths);
-    Ok(keys
-        .iter()
-        .filter_map(|key| {
-            let is_last = last_player.as_deref() == Some(key.as_str());
-            let character = character(db, key, is_last, client, &region, ctx, &deaths);
+    let (client, characters) = characters(db, ctx)?;
+    Ok(characters
+        .into_values()
+        .filter_map(|character| {
             let known = character.server.filter(|s| ctx.known_servers.contains(s)).map(|s| s.to_string());
             let place = character.realm.or(known).or(character.realm_type)?;
-            Some(format!("{}|{}|{}", client_name(client), region, place))
+            Some(format!("{}|{}|{}", client_name(client), character.region, place))
         })
         .collect())
 }
 
-fn client_name(client: Client) -> &'static str {
+/// Every character of the file by key, named as the upload names it.
+pub fn characters(db: &Value, ctx: &Context) -> Result<(Client, BTreeMap<String, Character>), PayloadError> {
+    let (client, region) = client_and_region(db, ctx)?;
+    let deaths = own_deaths(db);
+    let (keys, last_player) = character_keys(db, &deaths);
+    let characters = keys
+        .into_iter()
+        .map(|key| {
+            let is_last = last_player.as_deref() == Some(key.as_str());
+            let character = character(db, &key, is_last, client, &region, ctx, &deaths);
+            (key, character)
+        })
+        .collect();
+    Ok((client, characters))
+}
+
+pub fn client_name(client: Client) -> &'static str {
     match client {
         Client::Era => "era",
         Client::Forever => "forever",
@@ -807,7 +826,7 @@ fn bounty_event(e: &Value, client: Client) -> Option<BountyEvent> {
 }
 
 /// A plain player key; a Forever killer known only by the given name ("guid:...") is left out.
-fn player_ref(key: &str, client: Client) -> Option<PlayerRef> {
+pub(crate) fn player_ref(key: &str, client: Client) -> Option<PlayerRef> {
     if key.starts_with("guid:") {
         return None;
     }
@@ -996,7 +1015,7 @@ fn map_outlaw_rank(rank: &str) -> Option<String> {
     Some(mapped.into())
 }
 
-fn values(v: &Value) -> Box<dyn Iterator<Item = &Value> + '_> {
+pub(crate) fn values(v: &Value) -> Box<dyn Iterator<Item = &Value> + '_> {
     match v {
         Value::Array(list) => Box::new(list.iter()),
         Value::Object(map) => Box::new(map.values()),
@@ -1004,11 +1023,11 @@ fn values(v: &Value) -> Box<dyn Iterator<Item = &Value> + '_> {
     }
 }
 
-fn text(v: &Value) -> Option<String> {
+pub(crate) fn text(v: &Value) -> Option<String> {
     v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from)
 }
 
-fn int(v: &Value) -> Option<i64> {
+pub(crate) fn int(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))
 }
 

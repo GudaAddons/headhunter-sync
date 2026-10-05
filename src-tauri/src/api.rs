@@ -31,6 +31,20 @@ pub enum UploadOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ScreenshotOutcome {
+    /// 201 saved, or 200: the website had it already.
+    Saved,
+    /// 409, 422 or another 4xx: the website will never take this one.
+    Refused(String),
+    /// 401: the token was signed out on the website.
+    SignedOut,
+    /// Offline, rate limited or a server error: try again later.
+    Retry(String),
+}
+
+const WEBP_TYPE: &str = "image/webp";
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum DownloadOutcome {
     /// 200: the data and its ETag.
     Fresh(Value, Option<String>),
@@ -139,6 +153,31 @@ impl Api {
         }
     }
 
+    /// One screenshot as `multipart/form-data`: the text `fields` and the WebP picture.
+    pub async fn upload_screenshot(&self, token: &str, fields: Vec<(String, String)>, file_name: String, picture: Vec<u8>) -> ScreenshotOutcome {
+        let image = match reqwest::multipart::Part::bytes(picture).file_name(file_name).mime_str(WEBP_TYPE) {
+            Ok(image) => image,
+            Err(e) => return ScreenshotOutcome::Refused(e.to_string()),
+        };
+        let form = fields.into_iter().fold(reqwest::multipart::Form::new(), |form, (name, value)| form.text(name, value)).part("image", image);
+        let response = match self
+            .http
+            .post(config::api("sync/screenshots"))
+            .bearer_auth(token)
+            .header("Accept", "application/json")
+            .header("Accept-Language", i18n::accept_language())
+            .multipart(form)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => return ScreenshotOutcome::Retry(offline_message(&e)),
+        };
+        let status = response.status().as_u16();
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        screenshot_outcome(status, &body)
+    }
+
     /// The WANTED and Duels lists of these worlds and the account's own records there,
     /// for the HeadHunter_Data addon. `etag` from the last answer gives `Unchanged`.
     pub async fn download(&self, token: &str, worlds: &[String], etag: Option<&str>) -> DownloadOutcome {
@@ -206,6 +245,16 @@ async fn token_answer(response: reqwest::Response, refused: &str) -> Result<(Str
     }
 }
 
+fn screenshot_outcome(status: u16, body: &Value) -> ScreenshotOutcome {
+    match status {
+        200 | 201 => ScreenshotOutcome::Saved,
+        401 | 403 => ScreenshotOutcome::SignedOut,
+        429 => ScreenshotOutcome::Retry(i18n::t("The website asks to slow down; trying again soon.")),
+        400..=499 => ScreenshotOutcome::Refused(first_error(body).unwrap_or_else(|| i18n::t("The website refused the data."))),
+        _ => ScreenshotOutcome::Retry(i18n::tr("The website answered :status; trying again soon.", &[("status", &status.to_string())])),
+    }
+}
+
 fn user_from(u: &Value) -> User {
     User {
         name: u["name"].as_str().unwrap_or_default().to_string(),
@@ -258,6 +307,17 @@ mod tests {
         let body = json!({ "message": "The given data was invalid.", "errors": { "email": ["These credentials do not match our records."] } });
         assert_eq!(first_error(&body).as_deref(), Some("These credentials do not match our records."));
         assert_eq!(first_error(&json!({ "message": "Nope" })).as_deref(), Some("Nope"));
+    }
+
+    #[test]
+    fn reads_a_screenshot_answer() {
+        assert_eq!(screenshot_outcome(201, &Value::Null), ScreenshotOutcome::Saved);
+        assert_eq!(screenshot_outcome(200, &Value::Null), ScreenshotOutcome::Saved);
+        assert_eq!(screenshot_outcome(422, &json!({ "errors": { "t": ["Too old."] } })), ScreenshotOutcome::Refused("Too old.".into()));
+        assert!(matches!(screenshot_outcome(409, &Value::Null), ScreenshotOutcome::Refused(_)));
+        assert_eq!(screenshot_outcome(401, &Value::Null), ScreenshotOutcome::SignedOut);
+        assert!(matches!(screenshot_outcome(429, &Value::Null), ScreenshotOutcome::Retry(_)));
+        assert!(matches!(screenshot_outcome(503, &Value::Null), ScreenshotOutcome::Retry(_)));
     }
 
     #[test]

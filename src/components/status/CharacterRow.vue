@@ -61,6 +61,10 @@ const result = computed(() =>
                         ·
                         {{ $t(':count records', { count: character.result.records }) }}
                     </template>
+                    <template v-if="character.result.screenshots">
+                        ·
+                        {{ $t(':count screenshots', { count: character.result.screenshots }) }}
+                    </template>
                 </template>
                 <template v-else>{{ $t('Nothing sent yet') }}</template>
             </span>
