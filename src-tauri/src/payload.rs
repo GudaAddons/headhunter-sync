@@ -284,6 +284,18 @@ pub struct SharedDeath {
     pub victim: PlayerRef,
     #[serde(flatten)]
     pub death: Death,
+    /// "peer" (live from the victim) or "relay" (passed on at login catch-up)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relayed_by: Option<String>,
+    /// Our character that got it, when and where (addon 0.4.2 on)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received_map_id: Option<i64>,
 }
 
 /// A player's bounty on their killer (addon `db.posters`).
@@ -667,6 +679,11 @@ fn shared_death(d: &Value, client: Client) -> Option<SharedDeath> {
             sex: sex(&d["victim"]["sex"]),
         },
         death: death(d, client)?,
+        via: text(&d["origin"]),
+        relayed_by: text(&d["relayedBy"]).map(|k| split_key(&k, client).0),
+        received_by: text(&d["receivedBy"]).map(|k| split_key(&k, client).0),
+        received_at: int(&d["receivedAt"]),
+        received_map_id: int(&d["receivedMap"]),
     })
 }
 
@@ -1198,6 +1215,7 @@ mod tests {
         let mut db = era_db();
         db["reports"] = json!({
             "Rowena-Firemaw:500": { "id": "Rowena-Firemaw:500", "t": 500, "origin": "peer",
+              "receivedBy": "Tessa-Firemaw", "receivedAt": 502, "receivedMap": 1413,
               "victim": { "key": "Rowena-Firemaw", "level": 30, "class": "HUNTER", "race": "Troll" },
               "killer": { "key": "Brute-Firemaw", "level": 45, "class": "WARRIOR", "race": "Human" },
               "mapID": 1413, "confidence": "exact", "classification": "coward" },
@@ -1219,8 +1237,29 @@ mod tests {
         assert_eq!(shared.victim.faction.as_deref(), Some("horde"));
         assert_eq!((shared.death.t, shared.death.victim_level), (500, 30));
         assert_eq!(shared.death.attackers[0].name.as_deref(), Some("Brute"));
+        assert_eq!(shared.via.as_deref(), Some("peer"));
+        assert_eq!(shared.received_by.as_deref(), Some("Tessa"));
+        assert_eq!((shared.received_at, shared.received_map_id), (Some(502), Some(1413)));
+        assert_eq!(shared.relayed_by, None);
         assert_eq!(main.sent_after.shared_deaths, 500);
         assert!(by_key(&uploads, "Alt-Firemaw").payload.shared_deaths.is_empty(), "only with the last character");
+    }
+
+    #[test]
+    fn sends_who_passed_on_a_relayed_death() {
+        let mut db = era_db();
+        db["reports"] = json!({
+            "Rowena-Firemaw:500": { "id": "Rowena-Firemaw:500", "t": 500, "origin": "relay", "relayedBy": "Corin-Firemaw",
+              "victim": { "key": "Rowena-Firemaw", "level": 30 }, "killer": { "key": "Brute-Firemaw", "level": 45 },
+              "confidence": "exact", "classification": "coward" }
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let shared = &by_key(&uploads, "Tessa-Firemaw").payload.shared_deaths[0];
+        assert_eq!(shared.via.as_deref(), Some("relay"));
+        assert_eq!(shared.relayed_by.as_deref(), Some("Corin"));
+        assert_eq!(shared.received_by, None, "older addon data has no receiver");
+        let json = serde_json::to_value(shared).unwrap();
+        assert!(json.get("received_by").is_none(), "left out, not null");
     }
 
     #[test]
