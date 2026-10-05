@@ -13,6 +13,10 @@ use crate::payload::{self, Character, Client, Context, PayloadError, Sent};
 /// and the write.
 pub const MATCH_SECONDS: i64 = 3;
 pub const MAX_WIDTH: u32 = 1280;
+/// Only the middle of the screen goes up (author, 2026-10-05): the fight is there, and
+/// the chat, the minimap and the action bars stay on the player's PC.
+pub const CROP_WIDTH_SHARE: f64 = 0.6;
+pub const CROP_HEIGHT_SHARE: f64 = 0.7;
 pub const WEBP_QUALITY: f32 = 75.0;
 pub const MAX_BYTES: usize = 1_000_000;
 /// A picture still too big is tried again this much lower, down to `MIN_QUALITY`.
@@ -159,9 +163,18 @@ pub fn find(dir: &Path, file: &str, uploaded: &[String]) -> Option<PathBuf> {
     closest(names.iter().map(String::as_str), file).map(|name| dir.join(name))
 }
 
-/// The picture as a lossy WebP at most `MAX_WIDTH` wide and `MAX_BYTES` big.
+/// The middle `CROP_WIDTH_SHARE` x `CROP_HEIGHT_SHARE` of the picture.
+pub fn center(picture: &image::DynamicImage) -> image::DynamicImage {
+    let width = ((f64::from(picture.width()) * CROP_WIDTH_SHARE).round() as u32).max(1);
+    let height = ((f64::from(picture.height()) * CROP_HEIGHT_SHARE).round() as u32).max(1);
+    let x = (picture.width() - width) / 2;
+    let y = (picture.height() - height) / 2;
+    picture.crop_imm(x, y, width, height)
+}
+
+/// The middle of the picture as a lossy WebP at most `MAX_WIDTH` wide and `MAX_BYTES` big.
 pub fn to_webp(path: &Path) -> Result<Vec<u8>, String> {
-    let picture = image::open(path).map_err(|e| e.to_string())?;
+    let picture = center(&image::open(path).map_err(|e| e.to_string())?);
     let picture = if picture.width() > MAX_WIDTH {
         let height = (u64::from(picture.height()) * u64::from(MAX_WIDTH) / u64::from(picture.width())).max(1) as u32;
         picture.resize_exact(MAX_WIDTH, height, image::imageops::FilterType::Lanczos3)
@@ -340,8 +353,20 @@ mod tests {
         assert_eq!(&bytes[..4], b"RIFF");
         assert_eq!(&bytes[8..12], b"WEBP");
         let decoded = webp::Decoder::new(&bytes).decode().unwrap();
-        assert_eq!((decoded.width(), decoded.height()), (1280, 720));
+        // The middle 1536 x 1008 of 2560 x 1440, then 1280 wide
+        assert_eq!((decoded.width(), decoded.height()), (1280, 840));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn keeps_only_the_middle_of_the_screen() {
+        // Chat in the bottom left corner (red), the fight in the middle (green)
+        let picture = image::RgbImage::from_fn(1000, 1000, |x, y| {
+            if x < 150 && y > 850 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 255, 0]) }
+        });
+        let middle = center(&image::DynamicImage::ImageRgb8(picture)).to_rgb8();
+        assert_eq!((middle.width(), middle.height()), (600, 700));
+        assert!(middle.pixels().all(|p| p[0] == 0), "no chat left in the picture");
     }
 
     #[test]
@@ -354,7 +379,7 @@ mod tests {
             let decoded = webp::Decoder::new(&bytes).decode().unwrap();
             (decoded.width(), decoded.height())
         };
-        assert_eq!(decoded_size, (800, 600));
+        assert_eq!(decoded_size, (480, 420), "the middle of 800 x 600, not made bigger");
         let _ = std::fs::remove_dir_all(dir);
     }
 

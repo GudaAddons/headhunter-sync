@@ -29,6 +29,8 @@ pub const MAX_KNOWN_PLAYERS: usize = 2000;
 pub const MAX_GLASSES: usize = 500;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
 const SERVER_FIELD: &str = "server";
+/// The screenshot statuses the addon writes on a death (Sync/Screenshots.lua STATUS).
+const SHOT_STATUSES: [&str; 5] = ["taken", "off", "limit", "no_app", "failed"];
 pub const MIN_SERVER: i64 = 1;
 /// Addon schema 2 keeps each home's tables under `homes["forever|4619"]`.
 const HOMES_FIELD: &str = "homes";
@@ -224,6 +226,10 @@ pub struct Death {
     pub confidence: String,
     pub classification: String,
     pub attackers: Vec<Attacker>,
+    /// What happened with the screenshot of this death (addon HH-132): taken, off, limit,
+    /// no_app or failed; none from older addons and for deaths others shared
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shot: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Default)]
@@ -738,6 +744,7 @@ fn death(d: &Value, client: Client) -> Option<Death> {
         confidence: text(&d["confidence"])?,
         classification,
         attackers,
+        shot: text(&d["shot"]).filter(|s| SHOT_STATUSES.contains(&s.as_str())),
     })
 }
 
@@ -1068,10 +1075,10 @@ mod tests {
                 { "id": "Tessa-Firemaw:100", "t": 100, "victim": { "key": "Tessa-Firemaw", "level": 41, "class": "PRIEST", "race": "Scourge" },
                   "killer": { "key": "Brute-Firemaw", "level": -1, "class": "WARRIOR", "race": "Human", "sex": 3 },
                   "assists": [ { "name": "Sly", "guid": "Player-1-ABC", "level": 58, "class": "ROGUE", "race": "NightElf" } ],
-                  "mapID": 1434, "x": 0.5, "y": 0.25, "confidence": "exact", "classification": "coward" },
+                  "mapID": 1434, "x": 0.5, "y": 0.25, "confidence": "exact", "classification": "coward", "shot": "taken" },
                 { "id": "Alt-Firemaw:200", "t": 200, "victim": { "key": "Alt-Firemaw", "level": 20, "class": "MAGE", "race": "Troll" },
                   "killer": { "key": "Brute-Firemaw", "level": 30, "race": "Human" },
-                  "mapID": 1413, "confidence": "inferred", "classification": "normal" },
+                  "mapID": 1413, "confidence": "inferred", "classification": "normal", "shot": "bogus" },
                 { "id": "Tessa-Firemaw:300", "t": 300, "victim": { "key": "Tessa-Firemaw", "level": 42 },
                   "killer": { "key": "Fake-Firemaw", "level": 60 }, "confidence": "sim", "classification": "fair" },
                 { "id": "Tessa-Firemaw:400:demo", "t": 400, "demo": true, "victim": { "key": "Tessa-Firemaw", "level": 42 },
@@ -1161,6 +1168,10 @@ mod tests {
         assert_eq!(json["bounty_events"][0]["type"], "catch");
         assert_eq!(json["character"]["realm_type"], serde_json::Value::Null);
         assert!(json["deaths"][0]["attackers"][1].get("skull").is_none(), "skull only when true");
+        assert_eq!(death.shot.as_deref(), Some("taken"), "the screenshot status of the death");
+        let alt = &by_key(&uploads, "Alt-Firemaw").payload;
+        assert_eq!(alt.deaths[0].shot, None, "an unknown status stays out");
+        assert!(serde_json::to_value(alt).unwrap()["deaths"][0].get("shot").is_none(), "left out, not null");
     }
 
     #[test]
