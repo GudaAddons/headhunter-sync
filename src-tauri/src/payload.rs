@@ -472,7 +472,8 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         } else {
             (Vec::new(), Vec::new())
         };
-        let bounty_posters: Vec<BountyPoster> = posters_src.iter().filter_map(|p| bounty_poster(p, client)).collect();
+        let bounty_posters: Vec<BountyPoster> =
+            posters_src.iter().filter(|p| !from_website(p)).filter_map(|p| bounty_poster(p, client)).collect();
         let bounty_payments: Vec<BountyPayment> = payments_src.iter().filter_map(|p| bounty_payment(p, client)).collect();
         after.posters = max_t(&posters_src, already.posters);
         after.payments = max_t(&payments_src, already.payments);
@@ -1198,7 +1199,9 @@ mod tests {
         db["posters"] = json!({
             "Tessa-Firemaw:500": { "id": "Tessa-Firemaw:500", "owner": "Tessa-Firemaw", "target": "Brute-Firemaw", "reason": 1,
               "gold": 20000, "until": 259700, "t": 500, "origin": "local" },
-            "Tessa-Firemaw:600": { "owner": "Tessa-Firemaw", "target": "guid:Player-1-X", "reason": 2, "gold": 20000, "until": 9000, "t": 600 }
+            "Tessa-Firemaw:600": { "owner": "Tessa-Firemaw", "target": "guid:Player-1-X", "reason": 2, "gold": 20000, "until": 9000, "t": 600 },
+            "Mira-Firemaw:550": { "id": "Mira-Firemaw:550", "owner": "Mira-Firemaw", "target": "Brute-Firemaw", "reason": 3,
+              "gold": 30000, "until": 90000, "t": 550, "origin": "website" }
         });
         db["bountyPay"] = json!({
             "Tessa-Firemaw:500": { "posterId": "Tessa-Firemaw:500", "hunter": "Kestrel-Firemaw", "status": "unpaid",
@@ -1206,7 +1209,7 @@ mod tests {
         });
         let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
         let main = by_key(&uploads, "Tessa-Firemaw");
-        assert_eq!(main.payload.bounty_posters.len(), 1, "a given-name-only target is left out");
+        assert_eq!(main.payload.bounty_posters.len(), 1, "a given-name-only target and a website poster are left out");
         let poster = &main.payload.bounty_posters[0];
         assert_eq!((poster.owner.name.as_str(), poster.target.name.as_str()), ("Tessa", "Brute"));
         assert_eq!((poster.gold, poster.until, poster.reason), (20000, 259700, 1));
