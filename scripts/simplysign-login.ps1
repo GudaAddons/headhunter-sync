@@ -7,7 +7,7 @@
 $ErrorActionPreference = 'Stop'
 
 function Get-OtpParameters([string]$uri) {
-    $result = @{ Secret = $uri; Digits = 6; Period = 30 }
+    $result = @{ Secret = $uri; Digits = 6; Period = 30; Algorithm = 'SHA1' }
     if ($uri -match '^otpauth://') {
         $query = $uri.Split('?', 2)[1]
         foreach ($pair in $query.Split('&')) {
@@ -17,7 +17,10 @@ function Get-OtpParameters([string]$uri) {
                 'secret' { $result.Secret = $value }
                 'digits' { $result.Digits = [int]$value }
                 'period' { $result.Period = [int]$value }
-                'algorithm' { if ($value.ToUpper() -ne 'SHA1') { throw "Only SHA1 codes are supported, not $value" } }
+                'algorithm' {
+                    $result.Algorithm = $value.ToUpper()
+                    if ($result.Algorithm -notin 'SHA1', 'SHA256', 'SHA512') { throw "Unknown TOTP algorithm $value" }
+                }
             }
         }
     }
@@ -46,7 +49,7 @@ function ConvertFrom-Base32([string]$text) {
 function Get-TotpCode($otp, [long]$unixTime) {
     $counter = [BitConverter]::GetBytes([long][Math]::Floor($unixTime / $otp.Period))
     if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($counter) }
-    $hmac = New-Object System.Security.Cryptography.HMACSHA1 -ArgumentList (, (ConvertFrom-Base32 $otp.Secret))
+    $hmac = New-Object "System.Security.Cryptography.HMAC$($otp.Algorithm)" -ArgumentList (, (ConvertFrom-Base32 $otp.Secret))
     $hash = $hmac.ComputeHash($counter)
     $offset = $hash[$hash.Length - 1] -band 0x0F
     $number = (([int]$hash[$offset] -band 0x7F) -shl 24) -bor ([int]$hash[$offset + 1] -shl 16) -bor ([int]$hash[$offset + 2] -shl 8) -bor [int]$hash[$offset + 3]
