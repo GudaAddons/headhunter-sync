@@ -7,6 +7,8 @@
 //! HeadHunters shared and the players' bounty posters and payments (addon HH-118,
 //! 0.2.2+) go with it, and so do the enemies the addon saw up close (their sex, race and
 //! class fill in what the website does not know about them yet).
+//! Each character's own honorable kills (addon `honorKills`, by map and time) go with
+//! that character, so a character with kills but no deaths uploads too.
 //! Demo and simulated records are never sent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,6 +29,8 @@ pub const MAX_EVENT_RESULTS: usize = 200;
 /// The addon keeps at most 2000 enemies (its Core/Database.lua).
 pub const MAX_KNOWN_PLAYERS: usize = 2000;
 pub const MAX_GLASSES: usize = 500;
+/// The website takes at most 2000 a upload (`StoreUploadRequest::MAX_HONOR_KILLS`).
+pub const MAX_HONOR_KILLS: usize = 2000;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
 const SERVER_FIELD: &str = "server";
 /// The screenshot statuses the addon writes on a death (Sync/Screenshots.lua STATUS).
@@ -106,6 +110,9 @@ pub struct Sent {
     /// The newest glass sent (the addon's `glasses[].t`).
     #[serde(default)]
     pub glasses: i64,
+    /// The newest honorable kill sent (the addon's `honorKills[].t`).
+    #[serde(default)]
+    pub honor_kills: i64,
     /// The Forever server sent last: a new one is sent even with no new records, so the
     /// website files the character under its server's realm type.
     #[serde(default)]
@@ -141,6 +148,30 @@ pub struct Payload {
     /// Sync/Glasses.lua): the website counts them with its own.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glasses: Vec<Glass>,
+    /// The character's own honorable kills (the addon's Detection/HonorKills.lua): the
+    /// website adds them up as shootouts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub honor_kills: Vec<HonorKill>,
+}
+
+/// An honorable kill the game gave the character: `seq` tells apart kills in the same
+/// second; the victim only when the game's line names them (Classic Era).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct HonorKill {
+    pub t: i64,
+    pub seq: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub victim: Option<PlayerRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub honor: Option<i64>,
 }
 
 /// A glass raised to a catch: the catch is its outlaw and time, `by` who raised it.
@@ -519,6 +550,14 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         };
         let glasses: Vec<Glass> = glasses_src.iter().filter_map(|g| glass(g, client)).collect();
         after.glasses = max_t(&glasses_src, already.glasses);
+
+        let honor_src = whole_seconds_limited(
+            values(&db["honorKills"]).filter(|k| text(&k["by"]).as_deref() == Some(&key)),
+            already.honor_kills,
+            MAX_HONOR_KILLS,
+        );
+        let honor_kills: Vec<HonorKill> = honor_src.iter().filter_map(|k| honor_kill(k, client)).collect();
+        after.honor_kills = max_t(&honor_src, already.honor_kills);
         let mut deaths_out = deaths_out;
         let mut shared_out = shared_out;
         for death in deaths_out.iter_mut().chain(shared_out.iter_mut().map(|s| &mut s.death)) {
@@ -542,6 +581,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             && event_results.is_empty()
             && known_players.is_empty()
             && glasses.is_empty()
+            && honor_kills.is_empty()
         {
             continue;
         }
@@ -563,6 +603,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 event_results,
                 known_players,
                 glasses,
+                honor_kills,
             },
             sent_after: after,
         });
@@ -617,11 +658,13 @@ fn client_and_region(db: &Value, ctx: &Context) -> Result<(Client, String), Payl
     Ok((client, region))
 }
 
-/// Every character with own deaths, plus the one played last (and which one that is).
+/// Every character with own deaths or honorable kills, plus the one played last (and
+/// which one that is).
 fn character_keys(db: &Value, deaths: &[&Value]) -> (BTreeSet<String>, Option<String>) {
     let last_player = text(&db[META_FIELD][PLAYER_FIELD]["key"])
         .or_else(|| deaths.iter().max_by_key(|d| int(&d["t"])).and_then(|d| text(&d["victim"]["key"])));
     let mut keys: BTreeSet<String> = deaths.iter().filter_map(|d| text(&d["victim"]["key"])).collect();
+    keys.extend(values(&db["honorKills"]).filter_map(|k| text(&k["by"])));
     keys.extend(last_player.clone());
     (keys, last_player)
 }
@@ -912,6 +955,33 @@ fn glass(g: &Value, client: Client) -> Option<Glass> {
         by: player_ref(&text(&g["by"])?, client)?,
         t: int(&g["t"])?,
         popup: g["popup"].as_bool().unwrap_or(false),
+    })
+}
+
+/// Like `newest_first_limited`, but a cut never splits one second: the kills after the
+/// cut that share its last second would never be sent (`sent` keeps only the time), so
+/// that second waits for the next upload, unless it alone is over the limit.
+fn whole_seconds_limited<'a>(records: impl Iterator<Item = &'a Value>, after: i64, limit: usize) -> Vec<&'a Value> {
+    let mut list: Vec<&Value> = records.filter(|r| int(&r["t"]).is_some_and(|t| t > after)).collect();
+    list.sort_by_key(|r| (int(&r["t"]), int(&r["seq"])));
+    if list.len() > limit {
+        let cut = int(&list[limit]["t"]);
+        let whole = list[..limit].iter().filter(|r| int(&r["t"]) != cut).count();
+        list.truncate(if whole > 0 { whole } else { limit });
+    }
+    list
+}
+
+fn honor_kill(k: &Value, client: Client) -> Option<HonorKill> {
+    Some(HonorKill {
+        t: int(&k["t"])?,
+        seq: int(&k["seq"]).filter(|s| (1..=1000).contains(s)).unwrap_or(1),
+        map_id: int(&k["mapID"]).filter(|m| *m >= 1),
+        x: float(&k["x"]).filter(|v| (0.0..=1.0).contains(v)),
+        y: float(&k["y"]).filter(|v| (0.0..=1.0).contains(v)),
+        layer: int(&k["layer"]).filter(|l| *l >= 1),
+        victim: text(&k["victim"]).and_then(|v| player_ref(&v, client)),
+        honor: int(&k["honor"]).filter(|h| (0..=10000).contains(h)),
     })
 }
 
@@ -1612,6 +1682,51 @@ mod tests {
 
         let later = build(&db, &ctx(Client::Forever), |_| uploads[0].sent_after.clone()).unwrap();
         assert!(later.iter().all(|u| u.payload.glasses.is_empty()), "sent once");
+    }
+
+    #[test]
+    fn sends_each_characters_own_honorable_kills_once_also_from_a_character_without_deaths() {
+        let db = json!({
+            "meta": { "region": "eu", "client": "era", "player": { "key": "Tessa-Firemaw", "faction": "Alliance" } },
+            "honorKills": [
+                { "t": 100, "seq": 1, "by": "Tessa-Firemaw", "mapID": 1417, "x": 0.42, "y": 0.65, "layer": 3,
+                  "victim": "Gank-Stonespine", "honor": 12 },
+                { "t": 100, "seq": 2, "by": "Tessa-Firemaw", "mapID": 1417, "x": 1.7 },
+                { "t": 90, "seq": 1, "by": "Alt-Firemaw", "mapID": 1436 }
+            ]
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let of = |key: &str| uploads.iter().find(|u| u.key == key).unwrap();
+
+        let tessa = &of("Tessa-Firemaw").payload.honor_kills;
+        assert_eq!(tessa.len(), 2, "only her own");
+        assert_eq!(tessa[0].victim.as_ref().map(|v| (v.name.as_str(), v.realm.as_deref())), Some(("Gank", Some("Stonespine"))));
+        assert_eq!((tessa[0].map_id, tessa[0].layer, tessa[0].honor), (Some(1417), Some(3), Some(12)));
+        assert_eq!(tessa[1].seq, 2);
+        assert_eq!(tessa[1].x, None, "off the map");
+        assert!(serde_json::to_value(&tessa[1]).unwrap().get("victim").is_none(), "no name, no victim");
+        assert_eq!(of("Tessa-Firemaw").sent_after.honor_kills, 100);
+
+        let alt = &of("Alt-Firemaw").payload;
+        assert_eq!(alt.honor_kills.len(), 1, "a character with kills uploads them without any death");
+        assert_eq!(alt.character.name, "Alt");
+
+        let later = build(&db, &ctx(Client::Era), |key| uploads.iter().find(|u| u.key == key).unwrap().sent_after.clone()).unwrap();
+        assert!(later.iter().all(|u| u.payload.honor_kills.is_empty()), "sent once");
+    }
+
+    #[test]
+    fn a_cut_of_honorable_kills_never_splits_one_second() {
+        let kills = json!([
+            { "t": 10, "seq": 1 }, { "t": 20, "seq": 1 }, { "t": 20, "seq": 2 }, { "t": 20, "seq": 3 }, { "t": 30, "seq": 1 }
+        ]);
+        let cut = whole_seconds_limited(values(&kills), 0, 3);
+        assert_eq!(cut.iter().map(|k| int(&k["t"]).unwrap()).collect::<Vec<_>>(), vec![10], "second 20 waits whole");
+        let next = whole_seconds_limited(values(&kills), 10, 3);
+        assert_eq!(next.len(), 3, "then all of second 20");
+        let one_second = json!([{ "t": 20, "seq": 1 }, { "t": 20, "seq": 2 }]);
+        let alone = whole_seconds_limited(values(&one_second), 0, 1);
+        assert_eq!(alone.len(), 1, "a second over the limit by itself is cut");
     }
 
     #[test]
