@@ -1,5 +1,7 @@
 # Logs in to SimplySign Desktop on the Windows release runner, so signtool can use the
-# Certum cloud certificate. The 6-digit code comes from the TOTP seed in the SimplySign QR code.
+# Certum cloud certificate. The 6-digit code comes from the TOTP seed in the SimplySign QR code
+# (SimplySign uses SHA256). SimplySign Desktop logs in without a window when it starts with
+# "/autologin <email> <code>", and then adds the certificate to the user's store.
 #
 # Env: CERTUM_USER       SimplySign login (email)
 #      CERTUM_OTP_URI    otpauth://totp/...?secret=... from the QR code (or only the base32 secret)
@@ -56,6 +58,15 @@ function Get-TotpCode($otp, [long]$unixTime) {
     ($number % [Math]::Pow(10, $otp.Digits)).ToString().PadLeft($otp.Digits, '0')
 }
 
+function Show-SimplySignLog {
+    $log = Get-ChildItem ([Environment]::GetFolderPath('Personal') + '\SimplySignLog') -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($log) {
+        Write-Host "--- $($log.Name) ---"
+        Get-Content $log.FullName -Tail 40 | Where-Object { $_ -notmatch '(?i)token|password' }
+    }
+}
+
 foreach ($name in 'CERTUM_USER', 'CERTUM_OTP_URI', 'CERTUM_CERT_SHA1') {
     if (-not [Environment]::GetEnvironmentVariable($name)) { throw "$name is not set" }
 }
@@ -65,18 +76,6 @@ $otp = Get-OtpParameters $env:CERTUM_OTP_URI
 $exe = Get-ChildItem "$env:ProgramFiles\Certum", "${env:ProgramFiles(x86)}\Certum" -Recurse -Filter SimplySignDesktop.exe -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $exe) { throw 'SimplySignDesktop.exe not found' }
 
-# Windows copies smart card certificates into the user's store only while this service runs.
-Start-Service CertPropSvc -ErrorAction SilentlyContinue
-
-Start-Process $exe.FullName
-$shell = New-Object -ComObject WScript.Shell
-$deadline = (Get-Date).AddSeconds(60)
-while (-not $shell.AppActivate('SimplySign Desktop')) {
-    if ((Get-Date) -gt $deadline) { throw 'The SimplySign Desktop login window did not open' }
-    Start-Sleep -Seconds 1
-}
-Start-Sleep -Seconds 2
-
 # Wait for a fresh code if this one is about to run out.
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 if ($otp.Period - ($now % $otp.Period) -lt 5) {
@@ -85,15 +84,14 @@ if ($otp.Period - ($now % $otp.Period) -lt 5) {
 }
 $code = Get-TotpCode $otp $now
 
-$shell.AppActivate('SimplySign Desktop') | Out-Null
-$shell.SendKeys(($env:CERTUM_USER -replace '([+^%~(){}\[\]])', '{$1}'))
-$shell.SendKeys('{TAB}')
-$shell.SendKeys($code)
-$shell.SendKeys('{ENTER}')
+Start-Process $exe.FullName -ArgumentList '/autologin', $env:CERTUM_USER, $code
 
-$deadline = (Get-Date).AddSeconds(60)
+$deadline = (Get-Date).AddSeconds(90)
 while (-not (Test-Path "Cert:\CurrentUser\My\$thumbprint")) {
-    if ((Get-Date) -gt $deadline) { throw 'The certificate did not show in the user store after the SimplySign login' }
+    if ((Get-Date) -gt $deadline) {
+        Show-SimplySignLog
+        throw 'The certificate did not show in the user store after the SimplySign login'
+    }
     Start-Sleep -Seconds 2
 }
 Write-Host 'SimplySign Desktop is logged in and the certificate is ready'
