@@ -37,8 +37,9 @@ on start and every 6 hours, and offer "Install and restart". Local builds never 
    `HeadHunter-Sync_<version>_Windows-setup.exe` and `HeadHunter-Sync_<version>_macOS.dmg`
    (universal); the update signatures are inside `latest.json`, so no `.sig` files are uploaded.
 
-The installers are not code-signed yet: Windows SmartScreen says "Unknown publisher" (More info >
-Run anyway) and macOS asks to right-click > Open the first time.
+The Windows app and installer are code-signed with the Certum certificate when the `CERTUM_`
+secrets are set (see "Code signing policy"). macOS builds are not signed by Apple, so macOS asks
+to right-click > Open the first time.
 
 The first release is the current version, so tag it directly: `git tag v0.1.0 && git push --follow-tags`.
 
@@ -55,17 +56,28 @@ Repository settings the workflow needs: variable `HEADHUNTER_API_URL` (https), s
 `%USERPROFILE%\.tauri\headhunter-sync.key` (+ `.password`, `.pub`); the public key is in
 `tauri.conf.json`. Keep a backup of the private key: without it, installed apps can never update again.
 
+Code signing secrets: `CERTUM_USER` (SimplySign login email), `CERTUM_OTP_URI` (the
+`otpauth://totp/...` link inside the SimplySign QR code; it makes the 6-digit codes, so keep it
+as safe as a private key) and `CERTUM_CERT_SHA1` (the certificate thumbprint). The Windows job
+installs SimplySign Desktop, logs in with `scripts/simplysign-login.ps1` and passes the
+thumbprint to Tauri, which signs before it makes the update signature. Local builds are never
+code-signed. To sign by hand: log in to SimplySign Desktop with a code from the phone, then
+`npm run tauri build -- --config '{"bundle":{"windows":{"certificateThumbprint":"<thumbprint>","digestAlgorithm":"sha256","timestampUrl":"http://time.certum.pl","tsp":true}}}'`.
+The certificate is valid for one year: renew it at shop.certum.eu before it ends, then update
+`CERTUM_CERT_SHA1`.
+
 ## Author
 
 Salikh Gurgenidze ([Vati](https://github.com/vatichild)), author and maintainer.
 
 ## Code signing policy
 
-The Windows installers will be signed with a Certum Open Source Code Signing certificate issued
-to Salikh Gurgenidze (the certificate is being issued). Until then they are not code-signed, and
-Windows may say "Windows protected your PC" the first time (More info > Run anyway).
+The Windows app and installers are signed with a Certum Open Source Code Signing certificate
+issued to Salikh Gurgenidze. A new certificate needs some downloads before Windows SmartScreen
+trusts it, so for a while Windows may still say "Windows protected your PC" (More info > Run anyway).
 
-- Only installers built from this repository by its release workflow, from a version tag, are signed.
+- Only installers built from this repository by its release workflow are signed: releases from a
+  version tag, and draft dry runs, which are deleted after the check.
 - Only Salikh Gurgenidze signs releases.
 - The app updates are signed separately with the update key (see "Releasing an update").
 
