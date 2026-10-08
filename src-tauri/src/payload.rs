@@ -7,8 +7,9 @@
 //! HeadHunters shared and the players' bounty posters and payments (addon HH-118,
 //! 0.2.2+) go with it, and so do the enemies the addon saw up close (their sex, race and
 //! class fill in what the website does not know about them yet).
-//! Each character's own honorable kills (addon `honorKills`, by map and time) go with
-//! that character, so a character with kills but no deaths uploads too.
+//! Each character's own honorable kills (addon `honorKills`, by map and time) and finished
+//! wars (addon `wars`, HH-136) go with that character, so a character with kills or wars
+//! but no deaths uploads too.
 //! Demo and simulated records are never sent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,6 +32,10 @@ pub const MAX_KNOWN_PLAYERS: usize = 2000;
 pub const MAX_GLASSES: usize = 500;
 /// The website takes at most 2000 a upload (`StoreUploadRequest::MAX_HONOR_KILLS`).
 pub const MAX_HONOR_KILLS: usize = 2000;
+/// The website takes at most 100 wars an upload (`StoreUploadRequest::MAX_WARS`).
+pub const MAX_WARS: usize = 100;
+/// The addon keeps at most 300 fighters a war (its Alerts/Wars.lua).
+pub const MAX_WAR_FIGHTERS: usize = 300;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
 const SERVER_FIELD: &str = "server";
 /// The screenshot statuses the addon writes on a death (Sync/Screenshots.lua STATUS).
@@ -113,6 +118,9 @@ pub struct Sent {
     /// The newest honorable kill sent (the addon's `honorKills[].t`).
     #[serde(default)]
     pub honor_kills: i64,
+    /// The newest war end sent (the addon's `wars[].ended`).
+    #[serde(default)]
+    pub wars: i64,
     /// The Forever server sent last: a new one is sent even with no new records, so the
     /// website files the character under its server's realm type.
     #[serde(default)]
@@ -152,6 +160,47 @@ pub struct Payload {
     /// website adds them up as shootouts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub honor_kills: Vec<HonorKill>,
+    /// The character's finished wars (the addon's Alerts/Wars.lua): the website merges
+    /// every HeadHunter's report of one war.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wars: Vec<War>,
+}
+
+/// One HeadHunter's record of a war: a hotzone's fight from its start to its end, the
+/// players seen fighting on both sides, and our own kills, honor and deaths in it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct War {
+    pub uid: String,
+    pub map_id: i64,
+    pub started: i64,
+    pub ended: i64,
+    pub peak_fire: i64,
+    pub layers: Vec<i64>,
+    pub kills: i64,
+    pub honor: i64,
+    pub deaths: i64,
+    pub fighters: Vec<WarFighter>,
+}
+
+/// A player seen fighting in a war: "ally" fought for our side, "enemy" for the other.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct WarFighter {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realm: Option<String>,
+    pub side: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub faction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub race: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild: Option<String>,
+    pub first: i64,
+    pub last: i64,
 }
 
 /// An honorable kill the game gave the character: `seq` tells apart kills in the same
@@ -558,6 +607,10 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         );
         let honor_kills: Vec<HonorKill> = honor_src.iter().filter_map(|k| honor_kill(k, client)).collect();
         after.honor_kills = max_t(&honor_src, already.honor_kills);
+
+        let wars_src = ended_wars(&db["wars"], &key, already.wars, MAX_WARS);
+        let wars: Vec<War> = wars_src.iter().filter_map(|w| war(w, client)).collect();
+        after.wars = wars_src.iter().filter_map(|w| int(&w["ended"])).max().unwrap_or(already.wars).max(already.wars);
         let mut deaths_out = deaths_out;
         let mut shared_out = shared_out;
         for death in deaths_out.iter_mut().chain(shared_out.iter_mut().map(|s| &mut s.death)) {
@@ -582,6 +635,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             && known_players.is_empty()
             && glasses.is_empty()
             && honor_kills.is_empty()
+            && wars.is_empty()
         {
             continue;
         }
@@ -604,6 +658,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 known_players,
                 glasses,
                 honor_kills,
+                wars,
             },
             sent_after: after,
         });
@@ -658,13 +713,14 @@ fn client_and_region(db: &Value, ctx: &Context) -> Result<(Client, String), Payl
     Ok((client, region))
 }
 
-/// Every character with own deaths or honorable kills, plus the one played last (and
-/// which one that is).
+/// Every character with own deaths, honorable kills or wars, plus the one played last
+/// (and which one that is).
 fn character_keys(db: &Value, deaths: &[&Value]) -> (BTreeSet<String>, Option<String>) {
     let last_player = text(&db[META_FIELD][PLAYER_FIELD]["key"])
         .or_else(|| deaths.iter().max_by_key(|d| int(&d["t"])).and_then(|d| text(&d["victim"]["key"])));
     let mut keys: BTreeSet<String> = deaths.iter().filter_map(|d| text(&d["victim"]["key"])).collect();
     keys.extend(values(&db["honorKills"]).filter_map(|k| text(&k["by"])));
+    keys.extend(values(&db["wars"]).filter_map(|w| text(&w["by"])));
     keys.extend(last_player.clone());
     (keys, last_player)
 }
@@ -982,6 +1038,60 @@ fn honor_kill(k: &Value, client: Client) -> Option<HonorKill> {
         layer: int(&k["layer"]).filter(|l| *l >= 1),
         victim: text(&k["victim"]).and_then(|v| player_ref(&v, client)),
         honor: int(&k["honor"]).filter(|h| (0..=10000).contains(h)),
+    })
+}
+
+/// The character's finished wars ended after `after`, the oldest first, at most `limit`.
+/// A war still going has no end and waits for it.
+fn ended_wars<'a>(wars: &'a Value, key: &str, after: i64, limit: usize) -> Vec<&'a Value> {
+    let mut list: Vec<&Value> = values(wars)
+        .filter(|w| text(&w["by"]).as_deref() == Some(key) && int(&w["ended"]).is_some_and(|e| e > after))
+        .collect();
+    list.sort_by_key(|w| int(&w["ended"]));
+    list.truncate(limit);
+    list
+}
+
+fn war(w: &Value, client: Client) -> Option<War> {
+    let mut layers: Vec<i64> = values(&w["layers"]).filter_map(int).filter(|l| *l >= 1).collect();
+    layers.sort_unstable();
+    layers.dedup();
+    layers.truncate(20);
+    let mut fighters: Vec<WarFighter> = w["fighters"]
+        .as_object()
+        .map(|fighters| fighters.iter().filter_map(|(key, f)| war_fighter(key, f, client)).collect())
+        .unwrap_or_default();
+    fighters.sort_by(|a, b| (a.first, &a.name).cmp(&(b.first, &b.name)));
+    fighters.truncate(MAX_WAR_FIGHTERS);
+    Some(War {
+        uid: text(&w["id"])?.chars().take(160).collect(),
+        map_id: int(&w["zone"]).filter(|m| *m >= 1)?,
+        started: int(&w["started"])?,
+        ended: int(&w["ended"])?,
+        peak_fire: int(&w["peak"]).map(|p| p.clamp(1, 3)).unwrap_or(1),
+        layers,
+        kills: int(&w["kills"]).filter(|k| *k >= 0).unwrap_or(0),
+        honor: int(&w["honor"]).filter(|h| *h >= 0).unwrap_or(0),
+        deaths: int(&w["deaths"]).filter(|d| *d >= 0).unwrap_or(0),
+        fighters,
+    })
+}
+
+fn war_fighter(key: &str, f: &Value, client: Client) -> Option<WarFighter> {
+    let player = player_ref(key, client)?;
+    let side = text(&f["side"]).filter(|s| s == "ally" || s == "enemy")?;
+    let race = text(&f["race"]);
+    Some(WarFighter {
+        name: player.name,
+        realm: player.realm,
+        side,
+        faction: faction(&f[FACTION_FIELD]),
+        class: text(&f["class"]).map(|c| c.to_lowercase()),
+        race: race.as_deref().and_then(map_race),
+        level: int(&f["level"]).filter(|l| (1..=100).contains(l)),
+        guild: text(&f["guild"]).map(|g| g.chars().take(64).collect()),
+        first: int(&f["first"])?,
+        last: int(&f["last"])?,
     })
 }
 
@@ -1713,6 +1823,49 @@ mod tests {
 
         let later = build(&db, &ctx(Client::Era), |key| uploads.iter().find(|u| u.key == key).unwrap().sent_after.clone()).unwrap();
         assert!(later.iter().all(|u| u.payload.honor_kills.is_empty()), "sent once");
+    }
+
+    #[test]
+    fn sends_each_finished_war_once_with_the_players_seen_and_never_one_still_going() {
+        let db = json!({
+            "meta": { "region": "eu", "client": "era", "player": { "key": "Tessa-Firemaw", "faction": "Alliance" } },
+            "wars": [
+                { "id": "Tessa-Firemaw:1417:100", "by": "Tessa-Firemaw", "zone": 1417, "started": 100, "ended": 900,
+                  "lastHot": 900, "peak": 2, "layers": [7, 3, 3], "kills": 4, "honor": 40, "deaths": 1,
+                  "fighters": {
+                      "Tessa-Firemaw": { "side": "ally", "faction": "Alliance", "first": 100, "last": 900 },
+                      "Gank-Stonespine": { "side": "enemy", "faction": "Horde", "class": "ROGUE", "race": "Scourge",
+                                           "level": 60, "guild": "Red Hand", "first": 200, "last": 800 },
+                      "guid:Player-1-0001": { "side": "enemy", "first": 300, "last": 300 }
+                  } },
+                { "id": "Tessa-Firemaw:1436:2000", "by": "Tessa-Firemaw", "zone": 1436, "started": 2000,
+                  "lastHot": 2100, "peak": 1, "layers": [], "kills": 0, "honor": 0, "deaths": 0, "fighters": {} },
+                { "id": "Alt-Firemaw:1417:100", "by": "Alt-Firemaw", "zone": 1417, "started": 100, "ended": 700,
+                  "lastHot": 700, "peak": 3, "layers": [], "kills": 1, "honor": 9, "deaths": 0, "fighters": {} }
+            ]
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let of = |key: &str| uploads.iter().find(|u| u.key == key).unwrap();
+
+        let wars = &of("Tessa-Firemaw").payload.wars;
+        assert_eq!(wars.len(), 1, "only the finished one");
+        let war = &wars[0];
+        assert_eq!((war.map_id, war.started, war.ended, war.peak_fire), (1417, 100, 900, 2));
+        assert_eq!(war.layers, vec![3, 7], "each layer once");
+        assert_eq!((war.kills, war.honor, war.deaths), (4, 40, 1));
+        assert_eq!(war.fighters.len(), 2, "a player known only by GUID is left out");
+        let gank = war.fighters.iter().find(|f| f.name == "Gank").unwrap();
+        assert_eq!(gank.realm.as_deref(), Some("Stonespine"));
+        assert_eq!(gank.side, "enemy");
+        assert_eq!(gank.faction.as_deref(), Some("horde"));
+        assert_eq!(gank.class.as_deref(), Some("rogue"));
+        assert_eq!(gank.race.as_deref(), Some("undead"));
+        assert_eq!(gank.guild.as_deref(), Some("Red Hand"));
+        assert_eq!(of("Tessa-Firemaw").sent_after.wars, 900);
+        assert_eq!(of("Alt-Firemaw").payload.wars.len(), 1, "a character's war goes with that character");
+
+        let later = build(&db, &ctx(Client::Era), |key| uploads.iter().find(|u| u.key == key).unwrap().sent_after.clone()).unwrap();
+        assert!(later.iter().all(|u| u.payload.wars.is_empty()), "sent once");
     }
 
     #[test]
