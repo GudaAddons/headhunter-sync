@@ -45,6 +45,8 @@ const SHOT_STATUSES: [&str; 5] = ["taken", "off", "limit", "no_app", "failed"];
 pub const MIN_SERVER: i64 = 1;
 /// Addon schema 2 keeps each home's tables under `homes["forever|4619"]`.
 const HOMES_FIELD: &str = "homes";
+/// The region, in `meta` for the account and, from addon 0.5.1, in each home.
+const REGION_FIELD: &str = "region";
 const META_FIELD: &str = "meta";
 const PLAYER_FIELD: &str = "player";
 /// `meta.home`: the home played last.
@@ -465,7 +467,9 @@ pub enum PayloadError {
 }
 
 /// One home of the saved file as a flat file: its tables, the root zones and the root
-/// meta with the home's own player.
+/// meta with the home's own player and, from addon 0.5.1 (HH-139), the home's own region:
+/// the root region is the account's last one, so a US server's characters were filed in
+/// China after playing there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Home {
     /// "forever|4619"; `None` for an old flat file.
@@ -489,6 +493,9 @@ pub fn homes(db: &Value) -> Vec<Home> {
             meta.remove(PLAYER_FIELD);
             if let Some(player) = view.remove(PLAYER_FIELD) {
                 meta.insert(PLAYER_FIELD.into(), player);
+            }
+            if let Some(region) = view.remove(REGION_FIELD).filter(Value::is_string) {
+                meta.insert(REGION_FIELD.into(), region);
             }
             view.insert(META_FIELD.into(), Value::Object(meta));
             view.insert(ZONES_FIELD.into(), db[ZONES_FIELD].clone());
@@ -1871,6 +1878,26 @@ mod tests {
 
         let later = build(&db, &ctx(Client::Era), |key| uploads.iter().find(|u| u.key == key).unwrap().sent_after.clone()).unwrap();
         assert!(later.iter().all(|u| u.payload.honor_kills.is_empty()), "sent once");
+    }
+
+    #[test]
+    fn each_home_takes_its_own_region_over_the_accounts_last_one() {
+        let db = json!({
+            "meta": { "client": "forever", "region": "cn", "home": "forever|6746" },
+            "homes": {
+                "forever|4613": { "region": "us", "player": { "key": "Cz Qs" }, "deaths": [] },
+                "forever|6746": { "region": "cn", "player": { "key": "Niu Zhan" }, "deaths": [] },
+                "forever|4619": { "player": { "key": "Old Home" }, "deaths": [] }
+            }
+        });
+        let region = |key: &str| {
+            let home = homes(&db).into_iter().find(|h| h.key.as_deref() == Some(key)).unwrap();
+            text(&home.db["meta"]["region"])
+        };
+
+        assert_eq!(region("forever|4613").as_deref(), Some("us"), "a US server's home stays US");
+        assert_eq!(region("forever|6746").as_deref(), Some("cn"));
+        assert_eq!(region("forever|4619").as_deref(), Some("cn"), "an older addon's home falls back to the account's");
     }
 
     #[test]
