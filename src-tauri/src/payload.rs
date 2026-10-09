@@ -206,6 +206,10 @@ pub struct War {
     pub kills: i64,
     pub honor: i64,
     pub deaths: i64,
+    /// Whether the character was in the war's zone during it (addon 0.5.2, HH-140); none
+    /// from older addons, which also recorded wars they only heard of.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub present: Option<bool>,
     pub fighters: Vec<WarFighter>,
 }
 
@@ -1128,6 +1132,7 @@ fn war(w: &Value, client: Client) -> Option<War> {
         kills: int(&w["kills"]).filter(|k| *k >= 0).unwrap_or(0),
         honor: int(&w["honor"]).filter(|h| *h >= 0).unwrap_or(0),
         deaths: int(&w["deaths"]).filter(|d| *d >= 0).unwrap_or(0),
+        present: w["present"].as_bool(),
         fighters,
     })
 }
@@ -1925,6 +1930,17 @@ mod tests {
 
         let later = build(&db, &ctx(Client::Era), |key| uploads.iter().find(|u| u.key == key).unwrap().sent_after.clone()).unwrap();
         assert!(later.iter().all(|u| u.payload.witnesses.is_empty()), "sent once");
+    }
+
+    #[test]
+    fn sends_whether_the_character_was_in_the_wars_zone() {
+        let war = |present: Value| json!({ "id": "Tessa-Firemaw:1417:100", "zone": 1417, "started": 100, "ended": 200, "peak": 2,
+            "present": present, "fighters": {} });
+        assert_eq!(super::war(&war(json!(true)), Client::Era).unwrap().present, Some(true));
+        assert_eq!(super::war(&war(json!(false)), Client::Era).unwrap().present, Some(false), "only heard of it");
+        let old = super::war(&war(Value::Null), Client::Era).unwrap();
+        assert_eq!(old.present, None, "an older addon does not say");
+        assert!(serde_json::to_value(&old).unwrap().get("present").is_none());
     }
 
     #[test]
