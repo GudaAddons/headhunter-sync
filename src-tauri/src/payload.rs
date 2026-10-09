@@ -34,6 +34,8 @@ pub const MAX_GLASSES: usize = 500;
 pub const MAX_HONOR_KILLS: usize = 2000;
 /// The website takes at most 100 wars an upload (`StoreUploadRequest::MAX_WARS`).
 pub const MAX_WARS: usize = 100;
+/// The website takes at most 500 witness records an upload (`StoreUploadRequest::MAX_WITNESSES`).
+pub const MAX_WITNESSES: usize = 500;
 /// The addon keeps at most 300 fighters a war (its Alerts/Wars.lua).
 pub const MAX_WAR_FIGHTERS: usize = 300;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
@@ -121,6 +123,9 @@ pub struct Sent {
     /// The newest war end sent (the addon's `wars[].ended`).
     #[serde(default)]
     pub wars: i64,
+    /// The newest witness record sent (the addon's `witness[].t`).
+    #[serde(default)]
+    pub witnesses: i64,
     /// The Forever server sent last: a new one is sent even with no new records, so the
     /// website files the character under its server's realm type.
     #[serde(default)]
@@ -164,6 +169,26 @@ pub struct Payload {
     /// every HeadHunter's report of one war.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub wars: Vec<War>,
+    /// The hunted players the character saw die (the addon's Sync/Witness.lua): the
+    /// website takes another account's witness as proof of a catch or a bounty claim.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub witnesses: Vec<WitnessRecord>,
+}
+
+/// A hunted player the character saw die: when, where, and who landed the blow when the
+/// game told (Classic Era).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct WitnessRecord {
+    pub t: i64,
+    pub outlaw: PlayerRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub killer: Option<PlayerRef>,
 }
 
 /// One HeadHunter's record of a war: a hotzone's fight from its start to its end, the
@@ -608,6 +633,16 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         let honor_kills: Vec<HonorKill> = honor_src.iter().filter_map(|k| honor_kill(k, client)).collect();
         after.honor_kills = max_t(&honor_src, already.honor_kills);
 
+        let witness_src = newest_first_limited(
+            values(&db["witness"]).filter(|w| {
+                text(&w["by"]).as_deref() == Some(&key) && text(&w["origin"]).as_deref() == Some("local")
+            }),
+            already.witnesses,
+            MAX_WITNESSES,
+        );
+        let witnesses: Vec<WitnessRecord> = witness_src.iter().filter_map(|w| witness_record(w, client)).collect();
+        after.witnesses = max_t(&witness_src, already.witnesses);
+
         let wars_src = ended_wars(&db["wars"], &key, already.wars, MAX_WARS);
         let wars: Vec<War> = wars_src.iter().filter_map(|w| war(w, client)).collect();
         after.wars = wars_src.iter().filter_map(|w| int(&w["ended"])).max().unwrap_or(already.wars).max(already.wars);
@@ -636,6 +671,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             && glasses.is_empty()
             && honor_kills.is_empty()
             && wars.is_empty()
+            && witnesses.is_empty()
         {
             continue;
         }
@@ -659,6 +695,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 glasses,
                 honor_kills,
                 wars,
+                witnesses,
             },
             sent_after: after,
         });
@@ -1038,6 +1075,17 @@ fn honor_kill(k: &Value, client: Client) -> Option<HonorKill> {
         layer: int(&k["layer"]).filter(|l| *l >= 1),
         victim: text(&k["victim"]).and_then(|v| player_ref(&v, client)),
         honor: int(&k["honor"]).filter(|h| (0..=10000).contains(h)),
+    })
+}
+
+fn witness_record(w: &Value, client: Client) -> Option<WitnessRecord> {
+    Some(WitnessRecord {
+        t: int(&w["t"])?,
+        outlaw: player_ref(&text(&w["outlaw"])?, client)?,
+        map_id: int(&w["mapID"]).filter(|m| *m >= 1),
+        x: float(&w["x"]).filter(|v| (0.0..=1.0).contains(v)),
+        y: float(&w["y"]).filter(|v| (0.0..=1.0).contains(v)),
+        killer: text(&w["killer"]).and_then(|k| player_ref(&k, client)),
     })
 }
 
@@ -1823,6 +1871,33 @@ mod tests {
 
         let later = build(&db, &ctx(Client::Era), |key| uploads.iter().find(|u| u.key == key).unwrap().sent_after.clone()).unwrap();
         assert!(later.iter().all(|u| u.payload.honor_kills.is_empty()), "sent once");
+    }
+
+    #[test]
+    fn sends_each_characters_own_witness_records_once_never_ones_from_others() {
+        let db = json!({
+            "meta": { "region": "eu", "client": "era", "player": { "key": "Tessa-Firemaw", "faction": "Alliance" } },
+            "witness": {
+                "Gank-Stonespine:100:Tessa-Firemaw": { "outlaw": "Gank-Stonespine", "t": 100, "mapID": 1417, "x": 0.4,
+                    "y": 0.6, "killer": "Rowan-Firemaw", "by": "Tessa-Firemaw", "origin": "local" },
+                "Gank-Stonespine:101:Rowan-Firemaw": { "outlaw": "Gank-Stonespine", "t": 101, "by": "Rowan-Firemaw",
+                    "origin": "peer" },
+                "guid:Player-1-0A:102:Tessa-Firemaw": { "outlaw": "guid:Player-1-0A", "t": 102, "by": "Tessa-Firemaw",
+                    "origin": "local" }
+            }
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let tessa = &uploads.iter().find(|u| u.key == "Tessa-Firemaw").unwrap();
+
+        assert_eq!(tessa.payload.witnesses.len(), 1, "her own, with a name");
+        let w = &tessa.payload.witnesses[0];
+        assert_eq!((w.outlaw.name.as_str(), w.outlaw.realm.as_deref()), ("Gank", Some("Stonespine")));
+        assert_eq!(w.killer.as_ref().map(|k| k.name.as_str()), Some("Rowan"));
+        assert_eq!((w.t, w.map_id), (100, Some(1417)));
+        assert!(uploads.iter().all(|u| u.key != "Rowan-Firemaw"), "a peer's record is not ours to send");
+
+        let later = build(&db, &ctx(Client::Era), |key| uploads.iter().find(|u| u.key == key).unwrap().sent_after.clone()).unwrap();
+        assert!(later.iter().all(|u| u.payload.witnesses.is_empty()), "sent once");
     }
 
     #[test]
