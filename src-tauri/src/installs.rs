@@ -92,10 +92,14 @@ pub fn find(picked: &[PathBuf]) -> Vec<Install> {
             }
             let portal = fs::read_to_string(path.join("WTF").join("Config.wtf")).ok().and_then(|config| portal_region(&config));
             let product = fs::read_to_string(path.join(".flavor.info")).ok().and_then(|flavor| product(&flavor));
+            let client = accounts.iter().find_map(|a| fs::read_to_string(&a.saved_file).ok().and_then(|saved| saved_client(&saved)));
+            if is_classic_era(product.as_deref(), client) {
+                continue;
+            }
             let branch = product.as_deref().and_then(|product| branch_region(&build_info, product));
             let beta = product.unwrap_or_else(|| path.file_name().unwrap_or_default().to_string_lossy().to_string()).to_ascii_lowercase().contains("beta");
             installs.push(Install {
-                client: accounts.iter().find_map(|a| fs::read_to_string(&a.saved_file).ok().and_then(|saved| saved_client(&saved))),
+                client,
                 addon_version: addon_version(&path),
                 game_region: portal.or(branch),
                 beta,
@@ -105,6 +109,12 @@ pub fn find(picked: &[PathBuf]) -> Vec<Install> {
         }
     }
     installs
+}
+
+/// HeadHunter is for WoW Forever only (2026-10-10): a Classic Era game is not shown and
+/// not synced, by its product or by the client the addon saved there.
+fn is_classic_era(product: Option<&str>, client: Option<Client>) -> bool {
+    client == Some(Client::Era) || product.is_some_and(|product| product.to_ascii_lowercase().contains("classic_era"))
 }
 
 fn accounts(game: &Path) -> Vec<Account> {
@@ -260,27 +270,24 @@ mod tests {
 
         let installs: Vec<Install> = find(&[cn.clone()]).into_iter().filter(|i| i.path.starts_with(&root)).collect();
         let names: Vec<String> = installs.iter().map(|i| i.path.file_name().unwrap().to_string_lossy().to_string()).collect();
-        assert_eq!(names, ["_classic_beta_", "_classic_era_", "_classic_forever_", "_cn_beta_"], "picking a game folder finds its siblings");
+        assert_eq!(names, ["_classic_beta_", "_classic_forever_", "_cn_beta_"], "picking a game folder finds its siblings; Classic Era is left out");
 
-        let era_install = &installs[1];
-        assert_eq!(era_install.client, Some(Client::Era));
-        assert_eq!(era_install.addon_version.as_deref(), Some("0.1.4"));
-        assert_eq!(era_install.accounts.len(), 1, "only accounts that have HeadHunter data");
-        assert_eq!(era_install.accounts[0].name, "11111#1");
-        assert_eq!(era_install.game_region.as_deref(), Some("eu"));
-
-        assert_eq!(installs[3].client, Some(Client::Forever));
-        assert_eq!(installs[3].game_region.as_deref(), Some("cn"), "the CN beta's branch");
+        let cn_install = &installs[2];
+        assert_eq!(cn_install.client, Some(Client::Forever));
+        assert_eq!(cn_install.accounts.len(), 1, "only accounts that have HeadHunter data");
+        assert_eq!(cn_install.accounts[0].name, "33333#1");
+        assert_eq!(cn_install.game_region.as_deref(), Some("cn"), "the CN beta's branch");
         assert_eq!(installs[0].client, None, "not saved by the addon yet");
         assert_eq!(installs[0].game_region.as_deref(), Some("us"), "the test portal says nothing, the branch does");
-        assert_eq!(installs[2].client, None);
-        assert!(installs[2].accounts.is_empty(), "addon installed, no data yet");
+        assert_eq!(installs[1].client, None);
+        assert_eq!(installs[1].addon_version.as_deref(), Some("0.3.8"));
+        assert!(installs[1].accounts.is_empty(), "addon installed, no data yet");
 
         let betas: Vec<bool> = installs.iter().map(|i| i.beta).collect();
-        assert_eq!(betas, [true, false, false, true], "the beta and CN beta products say beta");
+        assert_eq!(betas, [true, false, true], "the beta and CN beta products say beta");
         assert!(!installs[0].beta_ended(BETA_END - 1), "the beta syncs until the release");
-        assert!(installs[0].beta_ended(BETA_END) && installs[3].beta_ended(BETA_END));
-        assert!(!installs[1].beta_ended(BETA_END) && !installs[2].beta_ended(BETA_END));
+        assert!(installs[0].beta_ended(BETA_END) && installs[2].beta_ended(BETA_END));
+        assert!(!installs[1].beta_ended(BETA_END));
         let _ = fs::remove_dir_all(root);
     }
 
