@@ -156,6 +156,30 @@ mod tests {
     }
 
     #[test]
+    fn writes_the_worlds_busted_and_punished_lists() {
+        let game = game_with_addon("punished");
+        let mut data = site_data();
+        let world = &mut data["worlds"]["era|eu|Firemaw"];
+        world["busted"] = json!([{ "name": "Dusk Blade", "caught_at": 1790200000, "map_id": 1434, "hunter": { "name": "Tessa" }, "killer_name": null, "glasses": 2 }]);
+        world["punished"] = json!([
+            { "name": "Grim Tusk", "realm": "Firemaw", "caught_at": 1790250000, "kind": "bully", "map_id": 1413, "hunter": { "name": "Tessa" }, "killer_name": "Tessa", "glasses": 1 },
+            { "name": "Sly Fox", "caught_at": 1790240000, "kind": "deadbeat", "map_id": null, "hunter": null, "killer_name": null, "glasses": 0 }
+        ]);
+        write(&game, &data).unwrap();
+
+        let text = fs::read_to_string(game.join(r"Interface\AddOns\HeadHunter_Data").join(DATA_FILE)).unwrap();
+        let back = lua::read_variable(&text, VARIABLE).unwrap();
+        let punished = &back["worlds"]["era|eu|Firemaw"]["punished"];
+        assert_eq!(punished[0]["kind"], "bully");
+        assert_eq!(punished[0]["caught_at"], 1790250000);
+        assert_eq!(punished[0]["hunter"]["name"], "Tessa");
+        assert_eq!(punished[1]["kind"], "deadbeat");
+        assert_eq!(back["worlds"]["era|eu|Firemaw"]["busted"][0]["glasses"], 2, "the same shape as Busted");
+
+        let _ = fs::remove_dir_all(game.parent().unwrap());
+    }
+
+    #[test]
     fn needs_headhunter_installed() {
         let game = std::env::temp_dir().join(format!("hh-download-none-{}", std::process::id()));
         assert!(write(&game, &site_data()).is_err());

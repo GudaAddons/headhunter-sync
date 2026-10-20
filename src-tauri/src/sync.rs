@@ -71,8 +71,6 @@ pub struct InstallStatus {
     pub settings: InstallSettings,
     /// A beta game: shown as "WoW Forever (Beta)".
     pub beta: bool,
-    /// A beta game after the beta closed: it never syncs again.
-    pub beta_ended: bool,
     pub accounts: Vec<AccountStatus>,
     /// The last download of the website's data into this game.
     pub download: Option<DownloadResult>,
@@ -180,11 +178,14 @@ impl Engine {
 
     // ------------------------------------------------------------------ status
 
+    /// The games shown in the window; a beta game that ended is left out, as it never
+    /// syncs again (website WEB-074).
     pub fn status(&self) -> Status {
         let state = self.state.lock().unwrap().clone();
         let installs = self
             .installs()
             .into_iter()
+            .filter(|install| !install.beta_ended(now()))
             .map(|install| {
                 let path = install.path.to_string_lossy().to_string();
                 let accounts = install
@@ -221,7 +222,6 @@ impl Engine {
                     settings: self.install_settings(&install),
                     download: state.downloads.get(&path).cloned(),
                     beta: install.beta,
-                    beta_ended: install.beta_ended(now()),
                     path,
                     client: install.client,
                     addon_version: install.addon_version.clone(),
@@ -324,6 +324,7 @@ impl Engine {
                     let key = store::state_key(&path, &account.name, home.as_deref(), &upload.key);
                     let records = upload.payload.deaths.len()
                         + upload.payload.catches.len()
+                        + upload.payload.punishments.len()
                         + upload.payload.duels.len()
                         + upload.payload.bounty_events.len();
                     let outcome = self.api.upload(&token, &upload.payload).await;

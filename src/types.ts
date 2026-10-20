@@ -53,7 +53,6 @@ export type InstallStatus = {
     addon_version: string | null;
     settings: InstallSettings;
     beta: boolean;
-    beta_ended: boolean;
     accounts: AccountStatus[];
     download: DownloadResult | null;
 };

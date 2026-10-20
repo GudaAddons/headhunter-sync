@@ -10,6 +10,8 @@
 //! Each character's own honorable kills (addon `honorKills`, by map and time) and finished
 //! wars (addon `wars`, HH-136) go with that character, so a character with kills or wars
 //! but no deaths uploads too.
+//! Each character's own punishments (addon `punishments`: a Bully or a Deadbeat killed
+//! who was not WANTED) go with that character like its catches.
 //! Demo and simulated records are never sent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,6 +22,7 @@ use serde_json::Value;
 pub const FORMAT_VERSION: u8 = 1;
 pub const MAX_DEATHS: usize = 500;
 pub const MAX_CATCHES: usize = 500;
+pub const MAX_PUNISHMENTS: usize = 500;
 pub const MAX_DUELS: usize = 2000;
 pub const MAX_BOUNTY_EVENTS: usize = 500;
 pub const MAX_ZONES: usize = 200;
@@ -128,6 +131,9 @@ pub struct Sent {
     /// The newest witness record sent (the addon's `witness[].t`).
     #[serde(default)]
     pub witnesses: i64,
+    /// The newest punishment sent (the addon's `punishments[].t`).
+    #[serde(default)]
+    pub punishments: i64,
     /// The Forever server sent last: a new one is sent even with no new records, so the
     /// website files the character under its server's realm type.
     #[serde(default)]
@@ -175,6 +181,10 @@ pub struct Payload {
     /// website takes another account's witness as proof of a catch or a bounty claim.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub witnesses: Vec<WitnessRecord>,
+    /// The Bullies and Deadbeats the character punished (the addon's Sync/Justice.lua): the
+    /// website lists them as Punished, next to Busted.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub punishments: Vec<Punishment>,
 }
 
 /// A hunted player the character saw die: when, where, and who landed the blow when the
@@ -376,6 +386,16 @@ pub struct Catch {
     pub killer_name: Option<String>,
 }
 
+/// A catch of a Hall of Shame player who was not WANTED, with its kind ("bully" or "deadbeat").
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Punishment {
+    pub t: i64,
+    pub outlaw: PlayerRef,
+    pub kind: String,
+    pub map_id: Option<i64>,
+    pub killer_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Duel {
     pub t: i64,
@@ -544,6 +564,18 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         let catches: Vec<Catch> = catches_src.iter().filter_map(|j| catch(j, client)).collect();
         after.catches = max_t(&catches_src, already.catches);
 
+        let punishments_src = newest_first_limited(
+            values(&db["punishments"]).filter(|p| {
+                matches!(text(&p["origin"]).as_deref(), None | Some("local"))
+                    && !flag(&p["demo"])
+                    && text(&p["by"]).as_deref() == Some(&key)
+            }),
+            already.punishments,
+            MAX_PUNISHMENTS,
+        );
+        let punishments: Vec<Punishment> = punishments_src.iter().filter_map(|p| punishment(p, client)).collect();
+        after.punishments = max_t(&punishments_src, already.punishments);
+
         let (duels, duels_src) = if is_last {
             let src = newest_first_limited(
                 // Every duel in the addon's Duels (author, 2026-09-26): our own, shared by other
@@ -672,6 +704,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             && deaths_out.is_empty()
             && shared_out.is_empty()
             && catches.is_empty()
+            && punishments.is_empty()
             && duels.is_empty()
             && bounty_events.is_empty()
             && zones.is_empty()
@@ -707,6 +740,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 honor_kills,
                 wars,
                 witnesses,
+                punishments,
             },
             sent_after: after,
         });
@@ -938,6 +972,19 @@ fn catch(j: &Value, client: Client) -> Option<Catch> {
     })
 }
 
+fn punishment(p: &Value, client: Client) -> Option<Punishment> {
+    let kind = text(&p["kind"]).filter(|k| matches!(k.as_str(), "bully" | "deadbeat"))?;
+    let outlaw = text(&p["outlaw"]).filter(|o| !o.starts_with("guid:"))?;
+    let (name, realm) = split_key(&outlaw, client);
+    Some(Punishment {
+        t: int(&p["t"])?,
+        outlaw: PlayerRef { name, realm, ..PlayerRef::default() },
+        kind,
+        map_id: int(&p["map"]).or_else(|| int(&p["mapID"])).filter(|m| *m >= 1),
+        killer_name: text(&p["killer"]).map(|k| split_key(&k, client).0),
+    })
+}
+
 fn duel(d: &Value, client: Client) -> Option<Duel> {
     let player = |side: &str| -> Option<PlayerRef> {
         let (name, realm) = split_key(&text(&d[side])?, client);
@@ -964,7 +1011,11 @@ fn duel(d: &Value, client: Client) -> Option<Duel> {
 }
 
 fn bounty_event(e: &Value, client: Client) -> Option<BountyEvent> {
-    let kind = text(&e["reason"]).filter(|r| matches!(r.as_str(), "join" | "catch" | "decline"))?;
+    let kind = match text(&e["reason"])?.as_str() {
+        reason @ ("join" | "catch" | "decline") => reason.to_string(),
+        "bully" | "deadbeat" => "punish".to_string(),
+        _ => return None,
+    };
     let outlaw_name = text(&e["outlaw"]).filter(|o| o != "?");
     Some(BountyEvent {
         t: int(&e["t"])?,
@@ -1852,6 +1903,56 @@ mod tests {
 
         let later = build(&db, &ctx(Client::Forever), |_| uploads[0].sent_after.clone()).unwrap();
         assert!(later.iter().all(|u| u.payload.glasses.is_empty()), "sent once");
+    }
+
+    #[test]
+    fn sends_each_characters_own_punishments_once_with_their_kind() {
+        let db = json!({
+            "meta": { "region": "eu", "client": "era", "player": { "key": "Tessa-Firemaw" } },
+            "punishments": {
+                "Brute-Firemaw:100:Tessa-Firemaw": { "outlaw": "Brute-Firemaw", "t": 100, "by": "Tessa-Firemaw", "kind": "bully", "map": 1434, "killer": "Tessa-Firemaw" },
+                "Sly-Firemaw:200:Tessa-Firemaw": { "outlaw": "Sly-Firemaw", "t": 200, "by": "Tessa-Firemaw", "kind": "deadbeat" },
+                "Grim-Firemaw:150:Rowan-Firemaw": { "outlaw": "Grim-Firemaw", "t": 150, "by": "Rowan-Firemaw", "kind": "bully", "origin": "peer" },
+                "guid:X:160:Tessa-Firemaw": { "outlaw": "guid:Player-1-X", "t": 160, "by": "Tessa-Firemaw", "kind": "bully" },
+                "Odd-Firemaw:170:Tessa-Firemaw": { "outlaw": "Odd-Firemaw", "t": 170, "by": "Tessa-Firemaw", "kind": "coward" },
+                "Demo-Firemaw:180:Tessa-Firemaw": { "outlaw": "Demo-Firemaw", "t": 180, "by": "Tessa-Firemaw", "kind": "bully", "demo": true }
+            }
+        });
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        assert_eq!(uploads.len(), 1);
+        let punishments = &uploads[0].payload.punishments;
+        assert_eq!(punishments.len(), 2, "our own only: no peer's, guid outlaw, unknown kind or demo");
+        let bully = &punishments[0];
+        assert_eq!((bully.t, bully.outlaw.name.as_str(), bully.outlaw.realm.as_deref()), (100, "Brute", Some("Firemaw")));
+        assert_eq!((bully.kind.as_str(), bully.map_id, bully.killer_name.as_deref()), ("bully", Some(1434), Some("Tessa")));
+        assert_eq!((punishments[1].kind.as_str(), punishments[1].map_id), ("deadbeat", None));
+        let json = serde_json::to_value(&uploads[0].payload).unwrap();
+        assert_eq!(json["punishments"][1]["kind"], "deadbeat");
+        assert_eq!(json["punishments"][1]["map_id"], serde_json::Value::Null);
+        assert_eq!(uploads[0].sent_after.punishments, 200);
+
+        let later = build(&db, &ctx(Client::Era), |_| uploads[0].sent_after.clone()).unwrap();
+        assert!(later.is_empty(), "sent once");
+
+        let none = build(&era_db(), &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let json = serde_json::to_value(&by_key(&none, "Tessa-Firemaw").payload).unwrap();
+        assert!(json.get("punishments").is_none(), "left out when there are none");
+    }
+
+    #[test]
+    fn sends_the_bounty_for_a_bully_or_a_deadbeat_as_a_punish_event() {
+        let mut db = era_db();
+        db["marks"]["events"] = json!([
+            { "t": 600, "delta": 3, "reason": "bully", "outlaw": "Brute-Firemaw", "total": 9, "hunter": "Tessa-Firemaw" },
+            { "t": 610, "delta": 3, "reason": "deadbeat", "outlaw": "Sly-Firemaw", "total": 12, "hunter": "Tessa-Firemaw" },
+            { "t": 620, "delta": 0, "reason": "skip", "outlaw": "Low", "total": 12, "hunter": "Tessa-Firemaw" }
+        ]);
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let events = &by_key(&uploads, "Tessa-Firemaw").payload.bounty_events;
+        assert_eq!(events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["punish", "punish"]);
+        assert_eq!((events[0].bounty, events[0].total_after), (3, Some(9)));
+        assert_eq!(events[1].outlaw.as_ref().unwrap().name, "Sly");
+        assert_eq!(serde_json::to_value(&events[0]).unwrap()["type"], "punish");
     }
 
     #[test]
