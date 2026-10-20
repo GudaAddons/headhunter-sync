@@ -1,6 +1,7 @@
 //! The app's languages, like the website (WEB-100): the English text is the key, and
-//! `src/locales/zh_CN.json` holds the Chinese for every key, for the window and for the
-//! texts made here (tray, notifications, messages). Values go in as `:name`.
+//! each other language's `src/locales/<language>.json` (zh_CN, ko, ru, ja) holds its text
+//! for every key, for the window and for the texts made here (tray, notifications,
+//! messages). Values go in as `:name`.
 //! The language is the Language setting; "auto" follows the system, which the window
 //! reports (`set_system_language`) and the settings keep for the next start.
 
@@ -10,21 +11,40 @@ use std::sync::{OnceLock, RwLock};
 pub const AUTO: &str = "auto";
 pub const ENGLISH: &str = "en";
 pub const CHINESE: &str = "zh_CN";
+pub const KOREAN: &str = "ko";
+pub const RUSSIAN: &str = "ru";
+pub const JAPANESE: &str = "ja";
+
+/// Every language but English, the source, with its file.
+const TRANSLATED: [(&str, &str); 4] = [
+    (CHINESE, include_str!("../../src/locales/zh_CN.json")),
+    (KOREAN, include_str!("../../src/locales/ko.json")),
+    (RUSSIAN, include_str!("../../src/locales/ru.json")),
+    (JAPANESE, include_str!("../../src/locales/ja.json")),
+];
 
 static CURRENT: RwLock<&'static str> = RwLock::new(ENGLISH);
 
-fn chinese() -> &'static HashMap<String, String> {
-    static TEXTS: OnceLock<HashMap<String, String>> = OnceLock::new();
-    TEXTS.get_or_init(|| serde_json::from_str(include_str!("../../src/locales/zh_CN.json")).expect("src/locales/zh_CN.json"))
+/// The texts of a language, or None for English.
+fn texts(language: &str) -> Option<&'static HashMap<String, String>> {
+    static TEXTS: OnceLock<HashMap<&'static str, HashMap<String, String>>> = OnceLock::new();
+    TEXTS
+        .get_or_init(|| {
+            TRANSLATED
+                .iter()
+                .map(|(language, file)| (*language, serde_json::from_str(file).unwrap_or_else(|_| panic!("src/locales/{language}.json"))))
+                .collect()
+        })
+        .get(language)
 }
 
-/// One of our languages for a setting or a system language ("zh-CN", "zh_TW", "en-US").
+/// One of our languages for a setting or a system language ("zh-CN", "zh_TW", "ko-KR", "en-US").
 pub fn supported(language: &str) -> &'static str {
-    if language.to_ascii_lowercase().starts_with("zh") {
-        CHINESE
-    } else {
-        ENGLISH
-    }
+    let language = language.to_ascii_lowercase();
+    [("zh", CHINESE), ("ko", KOREAN), ("ru", RUSSIAN), ("ja", JAPANESE)]
+        .into_iter()
+        .find(|(prefix, _)| language.starts_with(prefix))
+        .map_or(ENGLISH, |(_, supported)| supported)
 }
 
 /// The language to use: the setting, or the system's when it is "auto".
@@ -46,7 +66,13 @@ pub fn current() -> &'static str {
 
 /// For the website, so its messages come in the same language.
 pub fn accept_language() -> &'static str {
-    if current() == CHINESE { "zh-CN" } else { "en" }
+    match current() {
+        CHINESE => "zh-CN",
+        KOREAN => "ko",
+        RUSSIAN => "ru",
+        JAPANESE => "ja",
+        _ => "en",
+    }
 }
 
 pub fn t(text: &str) -> String {
@@ -58,10 +84,7 @@ pub fn tr(text: &str, values: &[(&str, &str)]) -> String {
 }
 
 fn translate(language: &str, text: &str, values: &[(&str, &str)]) -> String {
-    let mut out = match language {
-        CHINESE => chinese().get(text).cloned().unwrap_or_else(|| text.to_string()),
-        _ => text.to_string(),
-    };
+    let mut out = texts(language).and_then(|texts| texts.get(text)).cloned().unwrap_or_else(|| text.to_string());
     // Longest name first, so ":names" is not cut by ":name"
     let mut values = values.to_vec();
     values.sort_by_key(|(name, _)| std::cmp::Reverse(name.len()));
@@ -82,6 +105,9 @@ mod tests {
         assert_eq!(supported("zh-CN"), CHINESE);
         assert_eq!(supported("zh_TW"), CHINESE);
         assert_eq!(supported("en-US"), ENGLISH);
+        assert_eq!(supported("ko-KR"), KOREAN);
+        assert_eq!(supported("ru-RU"), RUSSIAN);
+        assert_eq!(supported("ja"), JAPANESE);
         assert_eq!(supported("de-DE"), ENGLISH);
         assert_eq!(resolve(AUTO, Some("zh-CN")), CHINESE);
         assert_eq!(resolve(AUTO, None), ENGLISH);
@@ -92,14 +118,16 @@ mod tests {
     #[test]
     fn translates_with_values() {
         assert_eq!(translate(ENGLISH, "Cannot reach :url. Is it online?", &[("url", "x.com")]), "Cannot reach x.com. Is it online?");
-        assert_eq!(translate(CHINESE, "Sync now", &[]), chinese()["Sync now"]);
+        assert_eq!(translate(CHINESE, "Sync now", &[]), texts(CHINESE).unwrap()["Sync now"]);
+        assert_eq!(translate(KOREAN, "Sync now", &[]), texts(KOREAN).unwrap()["Sync now"]);
         assert_eq!(translate(CHINESE, "Not a key", &[]), "Not a key");
     }
 
     /// Every text in the window (`$t('...')`, `trans('...')`) and here (`t("...")`,
-    /// `tr("...", ...)`) has its Chinese with the same values, and no Chinese is unused.
+    /// `tr("...", ...)`) has its text in each language with the same values, and no
+    /// language has texts the code no longer uses.
     #[test]
-    fn every_text_has_chinese() {
+    fn every_text_is_in_every_language() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut keys = BTreeSet::new();
         for file in files(&root.join("../src"), &["vue", "ts"]) {
@@ -114,13 +142,15 @@ mod tests {
             keys.extend(literals(&text, &["t(", "tr("], '"'));
         }
 
-        let chinese = chinese();
-        let missing: Vec<_> = keys.iter().filter(|key| !chinese.contains_key(*key)).collect();
-        assert!(missing.is_empty(), "no Chinese in src/locales/zh_CN.json for: {missing:#?}");
-        let unused: Vec<_> = chinese.keys().filter(|key| !keys.contains(*key)).collect();
-        assert!(unused.is_empty(), "unused Chinese in src/locales/zh_CN.json: {unused:#?}");
-        for (key, value) in chinese {
-            assert_eq!(placeholders(key), placeholders(value), "the values differ in the Chinese of {key:?}");
+        for (language, _) in TRANSLATED {
+            let texts = texts(language).unwrap();
+            let missing: Vec<_> = keys.iter().filter(|key| !texts.contains_key(*key)).collect();
+            assert!(missing.is_empty(), "missing in src/locales/{language}.json: {missing:#?}");
+            let unused: Vec<_> = texts.keys().filter(|key| !keys.contains(*key)).collect();
+            assert!(unused.is_empty(), "unused in src/locales/{language}.json: {unused:#?}");
+            for (key, value) in texts {
+                assert_eq!(placeholders(key), placeholders(value), "the values differ in {language} for {key:?}");
+            }
         }
     }
 

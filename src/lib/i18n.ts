@@ -1,14 +1,18 @@
 import type { App } from 'vue';
 import { ref } from 'vue';
+import ja from '@/locales/ja.json';
+import ko from '@/locales/ko.json';
+import ru from '@/locales/ru.json';
 import zhCN from '@/locales/zh_CN.json';
 
 /**
  * The app's languages, like the website: the English text is the key (`$t('Sync now')`
  * in templates, `trans('Sync now')` in code, `:name` for values), and
- * src/locales/zh_CN.json has the Chinese for every key. The Rust side reads the same
- * file for the tray and notifications, and decides the language (Status.language).
+ * each other language's src/locales/<language>.json (zh_CN, ko, ru, ja) has its text
+ * for every key. The Rust side reads the same files for the tray and notifications, and
+ * decides the language (Status.language).
  */
-const TEXTS: Record<string, Record<string, string>> = { zh_CN: zhCN };
+const TEXTS: Record<string, Record<string, string>> = { zh_CN: zhCN, ko, ru, ja };
 
 export const language = ref('en');
 
@@ -24,7 +28,7 @@ export function systemLanguage(): string {
     return navigator.languages?.[0] ?? navigator.language ?? 'en';
 }
 
-/** For Intl dates: "zh-CN" or "en". */
+/** For Intl dates: "zh-CN", "ko", "en"… */
 export function intlLocale(): string {
     return language.value.replace('_', '-');
 }

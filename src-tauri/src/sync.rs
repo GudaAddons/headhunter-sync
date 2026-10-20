@@ -57,7 +57,7 @@ pub struct Status {
     /// Seconds until the next timed sync, when the timer is on.
     pub next_run_in: Option<u64>,
     pub problem: Option<String>,
-    /// The language in use: "en" or "zh_CN".
+    /// The language in use: "en", "zh_CN", "ko", "ru" or "ja".
     pub language: &'static str,
     pub installs: Vec<InstallStatus>,
 }

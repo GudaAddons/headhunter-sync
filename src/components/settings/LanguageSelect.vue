@@ -16,6 +16,9 @@ const options = computed(() => [
     { value: 'auto', label: trans('Same as the system') },
     { value: 'en', label: 'English' },
     { value: 'zh_CN', label: '中文' },
+    { value: 'ko', label: '한국어' },
+    { value: 'ru', label: 'Русский' },
+    { value: 'ja', label: '日本語' },
 ]);
 </script>
 
@@ -36,7 +39,7 @@ const options = computed(() => [
                     v-for="option in options"
                     :key="option.value"
                     :value="option.value"
-                    :lang="option.value === 'zh_CN' ? 'zh-CN' : undefined"
+                    :lang="option.value === 'auto' ? undefined : option.value.replace('_', '-')"
                 >
                     {{ option.label }}
                 </SelectItem>

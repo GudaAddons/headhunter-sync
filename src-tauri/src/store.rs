@@ -26,7 +26,7 @@ pub struct Settings {
     pub start_with_system: bool,
     /// Deletes a screenshot HeadHunter took once the website has it.
     pub delete_screenshots: bool,
-    /// "auto" (the system's), "en" or "zh_CN".
+    /// "auto" (the system's), "en", "zh_CN", "ko", "ru" or "ja".
     pub language: String,
     /// The system language the window last reported, for "auto" before the window loads.
     pub system_language: Option<String>,
