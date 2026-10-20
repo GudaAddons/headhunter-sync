@@ -17,7 +17,7 @@ defineProps<{
             <FolderIcon class="mt-1 size-5 shrink-0 text-gold" />
             <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                 <h2 class="font-bold tracking-wider text-gold uppercase">
-                    {{ clientLabel(install.client) }}
+                    {{ clientLabel(install.client, install.beta) }}
                 </h2>
                 <span
                     class="truncate text-xs text-muted-foreground"

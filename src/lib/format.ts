@@ -38,12 +38,15 @@ export function splitKey(key: string): { name: string; realm: string | null } {
     return at > 0 ? { name: key.slice(0, at), realm: key.slice(at + 1) } : { name: key, realm: null };
 }
 
-export function clientLabel(client: Client | null): string {
+export function clientLabel(client: Client | null, beta: boolean): string {
     if (client === null) {
         return trans('Unknown game');
     }
+    if (client === 'era') {
+        return trans('Classic Era');
+    }
 
-    return client === 'era' ? trans('Classic Era') : trans('WoW Forever (Beta)');
+    return beta ? trans('WoW Forever (Beta)') : trans('WoW Forever');
 }
 
 /** The last folder of a path, e.g. "_classic_era_" */

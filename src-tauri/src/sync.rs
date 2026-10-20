@@ -69,7 +69,9 @@ pub struct InstallStatus {
     pub client: Option<Client>,
     pub addon_version: Option<String>,
     pub settings: InstallSettings,
-    /// A beta game after the release: it never syncs again.
+    /// A beta game: shown as "WoW Forever (Beta)".
+    pub beta: bool,
+    /// A beta game after the beta closed: it never syncs again.
     pub beta_ended: bool,
     pub accounts: Vec<AccountStatus>,
     /// The last download of the website's data into this game.
@@ -218,6 +220,7 @@ impl Engine {
                 InstallStatus {
                     settings: self.install_settings(&install),
                     download: state.downloads.get(&path).cloned(),
+                    beta: install.beta,
                     beta_ended: install.beta_ended(now()),
                     path,
                     client: install.client,

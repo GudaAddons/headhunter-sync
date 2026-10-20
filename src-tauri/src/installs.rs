@@ -14,8 +14,9 @@ use crate::payload::Client;
 
 const REGIONS: [&str; 5] = ["us", "eu", "kr", "tw", "cn"];
 
-/// WoW Forever is released on 2026-11-04 (00:00 UTC); from then on the beta games never sync.
-pub const BETA_END: i64 = 1_793_750_400;
+/// The WoW Forever beta closed for the stress test on 2026-10-21 (21:00 UTC); from then on the
+/// beta games never sync. The website keeps the beta as an archive (WEB-074).
+pub const BETA_END: i64 = 1_792_616_400;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Install {
@@ -34,7 +35,7 @@ pub struct Install {
 }
 
 impl Install {
-    /// A beta game after the release: its data is never sent again.
+    /// A beta game after the beta closed: its data is never sent again.
     pub fn beta_ended(&self, now: i64) -> bool {
         self.beta && now >= BETA_END
     }
@@ -231,7 +232,8 @@ mod tests {
     const BUILD_INFO: &str = "Branch!STRING:0|Active!DEC:1|Version!STRING:0|Product!STRING:0\n\
         eu|1|1.15.9.70003|wow_classic_era\n\
         us|1|1.60.1.70205|wow_classic_beta\n\
-        cn|1|1.60.1.70300|wow_classic_beta_cn\n";
+        cn|1|1.60.1.70300|wow_classic_beta_cn\n\
+        eu|1|1.60.1.70400|wowf\n";
 
     fn game(root: &Path, name: &str, product: &str) -> PathBuf {
         let game = root.join(name);
@@ -264,13 +266,15 @@ mod tests {
         let beta = game(&root, "_classic_beta_", "wow_classic_beta");
         fs::write(beta.join(r"WTF\Config.wtf"), "SET portal \"test\"\n").unwrap();
         saved(&beta, "44444#1", "HeadHunter_DB = {}\n");
+        let forever = game(&root, "_forever_", "wowf");
+        fs::create_dir_all(forever.join(r"Interface\AddOns\HeadHunter")).unwrap();
         saved(&game(&root, "_retail_", "wow"), "55555#1", "HeadHunter_DB = {}\n");
         saved(&game(&root, "_classic_era_ptr_", "wow_classic_era_ptr"), "66666#1", "HeadHunter_DB = {}\n");
         game(&root, "_anniversary_", "wow_anniversary");
 
         let installs: Vec<Install> = find(&[cn.clone()]).into_iter().filter(|i| i.path.starts_with(&root)).collect();
         let names: Vec<String> = installs.iter().map(|i| i.path.file_name().unwrap().to_string_lossy().to_string()).collect();
-        assert_eq!(names, ["_classic_beta_", "_classic_forever_", "_cn_beta_"], "picking a game folder finds its siblings; Classic Era is left out");
+        assert_eq!(names, ["_classic_beta_", "_classic_forever_", "_cn_beta_", "_forever_"], "picking a game folder finds its siblings; Classic Era is left out");
 
         let cn_install = &installs[2];
         assert_eq!(cn_install.client, Some(Client::Forever));
@@ -284,10 +288,11 @@ mod tests {
         assert!(installs[1].accounts.is_empty(), "addon installed, no data yet");
 
         let betas: Vec<bool> = installs.iter().map(|i| i.beta).collect();
-        assert_eq!(betas, [true, false, true], "the beta and CN beta products say beta");
-        assert!(!installs[0].beta_ended(BETA_END - 1), "the beta syncs until the release");
+        assert_eq!(betas, [true, false, true, false], "the beta and CN beta products say beta, the stress test's wowf does not");
+        assert_eq!(installs[3].game_region.as_deref(), Some("eu"), "the stress test's branch");
+        assert!(!installs[0].beta_ended(BETA_END - 1), "the beta syncs until the stress test");
         assert!(installs[0].beta_ended(BETA_END) && installs[2].beta_ended(BETA_END));
-        assert!(!installs[1].beta_ended(BETA_END));
+        assert!(!installs[1].beta_ended(BETA_END) && !installs[3].beta_ended(BETA_END));
         let _ = fs::remove_dir_all(root);
     }
 
