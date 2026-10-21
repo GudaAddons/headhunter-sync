@@ -14,9 +14,13 @@ use crate::payload::Client;
 
 const REGIONS: [&str; 5] = ["us", "eu", "kr", "tw", "cn"];
 
-/// The WoW Forever beta closed for the stress test on 2026-10-21 (21:00 UTC); from then on the
-/// beta games never sync. The website keeps the beta as an archive (WEB-074).
+/// The WoW Forever beta closed for the stress test on 2026-10-21 (21:00 UTC); the website
+/// keeps the beta as an archive from then on (WEB-074).
 pub const BETA_END: i64 = 1_792_616_400;
+
+/// The beta came back after the stress test and closes for good on 2026-10-23 (17:00 UTC);
+/// until then a beta game syncs into the website's beta archive, after it never again.
+pub const BETA_CLOSED: i64 = 1_792_774_800;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Install {
@@ -35,9 +39,15 @@ pub struct Install {
 }
 
 impl Install {
-    /// A beta game after the beta closed: its data is never sent again.
+    /// A beta game after the beta closed for good: its data is never sent again.
     pub fn beta_ended(&self, now: i64) -> bool {
-        self.beta && now >= BETA_END
+        self.beta && now >= BETA_CLOSED
+    }
+
+    /// A beta game between the stress test and the beta's close: it syncs into the
+    /// website's beta archive (the upload and download say `beta`).
+    pub fn beta_archive(&self, now: i64) -> bool {
+        self.beta && (BETA_END..BETA_CLOSED).contains(&now)
     }
 }
 
@@ -290,9 +300,12 @@ mod tests {
         let betas: Vec<bool> = installs.iter().map(|i| i.beta).collect();
         assert_eq!(betas, [true, false, true, false], "the beta and CN beta products say beta, the stress test's wowf does not");
         assert_eq!(installs[3].game_region.as_deref(), Some("eu"), "the stress test's branch");
-        assert!(!installs[0].beta_ended(BETA_END - 1), "the beta syncs until the stress test");
-        assert!(installs[0].beta_ended(BETA_END) && installs[2].beta_ended(BETA_END));
-        assert!(!installs[1].beta_ended(BETA_END) && !installs[3].beta_ended(BETA_END));
+        assert!(!installs[0].beta_ended(BETA_CLOSED - 1), "the beta syncs until it closes for good");
+        assert!(installs[0].beta_ended(BETA_CLOSED) && installs[2].beta_ended(BETA_CLOSED));
+        assert!(!installs[1].beta_ended(BETA_CLOSED) && !installs[3].beta_ended(BETA_CLOSED));
+        assert!(!installs[0].beta_archive(BETA_END - 1), "the live beta before the stress test");
+        assert!(installs[0].beta_archive(BETA_END) && installs[0].beta_archive(BETA_CLOSED - 1), "into the archive until the close");
+        assert!(!installs[0].beta_archive(BETA_CLOSED) && !installs[3].beta_archive(BETA_END), "never after it, never the stress test");
         let _ = fs::remove_dir_all(root);
     }
 

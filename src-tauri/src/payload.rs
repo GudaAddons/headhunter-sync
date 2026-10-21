@@ -97,6 +97,9 @@ pub struct Context {
     /// Forever server numbers the website knows (`forever_servers` of its last download).
     pub known_servers: BTreeSet<i64>,
     pub addon_version: String,
+    /// A beta game after the stress test (Install::beta_archive): its characters go into
+    /// the website's beta archive.
+    pub beta_archive: bool,
 }
 
 /// What was already sent for one character: the newest time per list, zones by id.
@@ -312,6 +315,10 @@ pub struct Character {
     pub sex: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<i64>,
+    /// A WoW Forever beta character after the stress test: the website files it into
+    /// its beta archive. Left out otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub beta: bool,
     /// `Some(None)` is sent as null: the character is in no guild (it left one).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild: Option<Option<String>>,
@@ -836,6 +843,7 @@ fn character(db: &Value, key: &str, is_last: bool, client: Client, region: &str,
             Client::Era => None,
         },
         name,
+        beta: ctx.beta_archive && client == Client::Forever,
         faction: player_faction(&snapshot[FACTION_FIELD], race.as_deref()),
         class: text(&snapshot["class"]).map(|c| c.to_lowercase()),
         race: race.as_deref().and_then(map_race),
@@ -1353,7 +1361,17 @@ mod tests {
     use serde_json::json;
 
     fn ctx(client: Client) -> Context {
-        Context { client: Some(client), region: Some("us".into()), realm_type: "pvp".into(), known_servers: BTreeSet::new(), addon_version: "0.1.4".into() }
+        Context { client: Some(client), region: Some("us".into()), realm_type: "pvp".into(), known_servers: BTreeSet::new(), addon_version: "0.1.4".into(), beta_archive: false }
+    }
+
+    #[test]
+    fn says_beta_only_for_a_beta_character_after_the_stress_test() {
+        let db = json!({ "meta": { "client": "forever", "player": { "key": "Tess Rider", "level": 14 } } });
+        let (_, live) = characters(&db, &ctx(Client::Forever)).unwrap();
+        let (_, beta) = characters(&db, &Context { beta_archive: true, ..ctx(Client::Forever) }).unwrap();
+
+        assert!(serde_json::to_value(&live["Tess Rider"]).unwrap().get("beta").is_none(), "left out for the live game");
+        assert_eq!(serde_json::to_value(&beta["Tess Rider"]).unwrap()["beta"], true);
     }
 
     /// Made-up players only (never the author's characters).

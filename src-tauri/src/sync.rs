@@ -494,7 +494,7 @@ impl Engine {
             wanted: previous.as_ref().map_or(0, |p| p.wanted),
             etag: etag.clone(),
         };
-        let stop = match self.api.download(token, worlds, etag.as_deref()).await {
+        let stop = match self.api.download(token, worlds, install.beta_archive(now()), etag.as_deref()).await {
             DownloadOutcome::Fresh(data, etag) => {
                 match download::write(&install.path, &data) {
                     Ok(changed) => {
@@ -635,6 +635,7 @@ fn context(install: &Install, settings: &InstallSettings, known_servers: std::co
         realm_type: settings.realm_type.clone(),
         known_servers,
         addon_version: install.addon_version.clone().unwrap_or_else(|| "unknown".into()),
+        beta_archive: install.beta_archive(now()),
     }
 }
 

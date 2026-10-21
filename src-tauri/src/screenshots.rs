@@ -209,6 +209,9 @@ pub fn fields(shot: &Shot) -> Vec<(String, String)> {
     ];
     out.extend(optional.into_iter().filter_map(|(name, value)| Some((name.to_string(), value?))));
     out.push(("character[name]".into(), character.name.clone()));
+    if character.beta {
+        out.push(("character[beta]".into(), "1".into()));
+    }
     if let (Client::Forever, Some(server)) = (character.client, character.server) {
         out.push(("character[server]".into(), server.to_string()));
     }
@@ -251,7 +254,7 @@ mod tests {
     use serde_json::json;
 
     fn ctx() -> Context {
-        Context { client: Some(Client::Era), region: Some("eu".into()), realm_type: "pvp".into(), known_servers: BTreeSet::new(), addon_version: "0.4.3".into() }
+        Context { client: Some(Client::Era), region: Some("eu".into()), realm_type: "pvp".into(), known_servers: BTreeSet::new(), addon_version: "0.4.3".into(), beta_archive: false }
     }
 
     /// Made-up players only.

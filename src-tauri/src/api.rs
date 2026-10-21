@@ -180,8 +180,13 @@ impl Api {
 
     /// The WANTED and Duels lists of these worlds and the account's own records there,
     /// for the HeadHunter_Data addon. `etag` from the last answer gives `Unchanged`.
-    pub async fn download(&self, token: &str, worlds: &[String], etag: Option<&str>) -> DownloadOutcome {
-        let query: Vec<(&str, &str)> = worlds.iter().map(|w| ("worlds[]", w.as_str())).collect();
+    /// `beta`: the worlds are of a beta game after the stress test, answered from the
+    /// website's beta archive under the same keys.
+    pub async fn download(&self, token: &str, worlds: &[String], beta: bool, etag: Option<&str>) -> DownloadOutcome {
+        let mut query: Vec<(&str, &str)> = worlds.iter().map(|w| ("worlds[]", w.as_str())).collect();
+        if beta {
+            query.push(("beta", "1"));
+        }
         let mut request = self
             .http
             .get(config::api("sync/download"))
