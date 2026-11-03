@@ -18,7 +18,8 @@ const REGIONS: [&str; 5] = ["us", "eu", "kr", "tw", "cn"];
 pub struct Install {
     /// The game folder, e.g. `G:\Games\World of Warcraft\_classic_era_`.
     pub path: PathBuf,
-    /// From the addon's saved `meta.client`; `None` until the addon saved it.
+    /// From the addon's saved `meta.client`, else WoW Forever for a WoW Forever product
+    /// (`is_forever`); `None` until the addon saved it in any other game.
     pub client: Option<Client>,
     /// `## Version` of the installed addon, when it is installed.
     pub addon_version: Option<String>,
@@ -80,7 +81,10 @@ pub fn find(picked: &[PathBuf]) -> Vec<Install> {
             }
             let portal = fs::read_to_string(path.join("WTF").join("Config.wtf")).ok().and_then(|config| portal_region(&config));
             let product = fs::read_to_string(path.join(".flavor.info")).ok().and_then(|flavor| product(&flavor));
-            let client = accounts.iter().find_map(|a| fs::read_to_string(&a.saved_file).ok().and_then(|saved| saved_client(&saved)));
+            let client = accounts
+                .iter()
+                .find_map(|a| fs::read_to_string(&a.saved_file).ok().and_then(|saved| saved_client(&saved)))
+                .or_else(|| is_forever(product.as_deref()).then_some(Client::Forever));
             if is_classic_era(product.as_deref(), client) || is_beta(product.as_deref(), &path) {
                 continue;
             }
@@ -101,6 +105,15 @@ pub fn find(picked: &[PathBuf]) -> Vec<Install> {
 /// not synced, by its product or by the client the addon saved there.
 fn is_classic_era(product: Option<&str>, client: Option<Client>) -> bool {
     client == Some(Client::Era) || product.is_some_and(|product| product.to_ascii_lowercase().contains("classic_era"))
+}
+
+/// WoW Forever's own products: `wowf`, and since the release (2026-11-04) any product that
+/// says "forever" and is neither a beta nor Classic Era (e.g. `wow_forever`, `wow_classic_forever`).
+fn is_forever(product: Option<&str>) -> bool {
+    product.is_some_and(|product| {
+        let product = product.to_ascii_lowercase();
+        product == "wowf" || (product.contains("forever") && !product.contains("beta") && !product.contains("classic_era"))
+    })
 }
 
 /// The WoW Forever beta closed for good (2026-10-23): a beta or CN beta game is not shown and
@@ -270,22 +283,35 @@ mod tests {
         fs::create_dir_all(forever.join("WTF").join("Account").join("88888#1").join("SavedVariables")).unwrap();
         saved(&game(&root, "_retail_", "wow"), "55555#1", "HeadHunter_DB = {}\n");
         saved(&game(&root, "_classic_era_ptr_", "wow_classic_era_ptr"), "66666#1", "HeadHunter_DB = {}\n");
-        game(&root, "_anniversary_", "wow_anniversary");
+        let anniversary = game(&root, "_anniversary_", "wow_anniversary");
+        saved(&anniversary, "99999#1", "HeadHunter_DB = {}\n");
 
         let installs: Vec<Install> = find(&[cn.clone()]).into_iter().filter(|i| i.path.starts_with(&root)).collect();
         let names: Vec<String> = installs.iter().map(|i| i.path.file_name().unwrap().to_string_lossy().to_string()).collect();
-        assert_eq!(names, ["_classic_forever_", "_forever_"], "picking a game folder finds its siblings; Classic Era and the beta games are left out");
+        assert_eq!(names, ["_anniversary_", "_classic_forever_", "_forever_"], "picking a game folder finds its siblings; Classic Era and the beta games are left out");
 
-        assert_eq!(installs[0].client, None, "not saved by the addon yet");
-        assert_eq!(installs[0].game_region.as_deref(), Some("us"), "the test portal says nothing, the branch does");
-        assert_eq!(installs[0].addon_version.as_deref(), Some("0.3.8"));
-        assert!(installs[0].accounts.is_empty(), "addon installed, no data yet");
+        assert_eq!(installs[0].client, None, "not saved by the addon yet, and not a WoW Forever product");
+        assert_eq!(installs[1].client, Some(Client::Forever), "the release product syncs as WoW Forever before the addon saved it");
+        assert_eq!(installs[1].game_region.as_deref(), Some("us"), "the test portal says nothing, the branch does");
+        assert_eq!(installs[1].addon_version.as_deref(), Some("0.3.8"));
+        assert!(installs[1].accounts.is_empty(), "addon installed, no data yet");
 
-        assert_eq!(installs[1].client, Some(Client::Forever));
-        assert_eq!(installs[1].accounts.len(), 1, "only accounts that have HeadHunter data");
-        assert_eq!(installs[1].accounts[0].name, "77777#1");
-        assert_eq!(installs[1].game_region.as_deref(), Some("eu"), "the wowf branch");
+        assert_eq!(installs[2].client, Some(Client::Forever));
+        assert_eq!(installs[2].accounts.len(), 1, "only accounts that have HeadHunter data");
+        assert_eq!(installs[2].accounts[0].name, "77777#1");
+        assert_eq!(installs[2].game_region.as_deref(), Some("eu"), "the wowf branch");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn knows_the_wow_forever_products() {
+        assert!(is_forever(Some("wowf")));
+        assert!(is_forever(Some("wow_forever")));
+        assert!(is_forever(Some("wow_classic_forever")));
+        assert!(!is_forever(Some("wow_forever_beta")), "a beta is never synced");
+        assert!(!is_forever(Some("wow_classic_era")));
+        assert!(!is_forever(Some("wow_anniversary")));
+        assert!(!is_forever(None));
     }
 
     #[test]
