@@ -69,8 +69,6 @@ pub struct InstallStatus {
     pub client: Option<Client>,
     pub addon_version: Option<String>,
     pub settings: InstallSettings,
-    /// A beta game: shown as "WoW Forever (Beta)".
-    pub beta: bool,
     pub accounts: Vec<AccountStatus>,
     /// The last download of the website's data into this game.
     pub download: Option<DownloadResult>,
@@ -178,14 +176,12 @@ impl Engine {
 
     // ------------------------------------------------------------------ status
 
-    /// The games shown in the window; a beta game that ended is left out, as it never
-    /// syncs again (website WEB-074).
+    /// The games shown in the window.
     pub fn status(&self) -> Status {
         let state = self.state.lock().unwrap().clone();
         let installs = self
             .installs()
             .into_iter()
-            .filter(|install| !install.beta_ended(now()))
             .map(|install| {
                 let path = install.path.to_string_lossy().to_string();
                 let accounts = install
@@ -221,7 +217,6 @@ impl Engine {
                 InstallStatus {
                     settings: self.install_settings(&install),
                     download: state.downloads.get(&path).cloned(),
-                    beta: install.beta,
                     path,
                     client: install.client,
                     addon_version: install.addon_version.clone(),
@@ -291,7 +286,7 @@ impl Engine {
 
         for install in self.installs() {
             let install_settings = self.install_settings(&install);
-            if !install_settings.enabled || install.beta_ended(now()) {
+            if !install_settings.enabled {
                 continue;
             }
             let path = install.path.to_string_lossy().to_string();
@@ -494,7 +489,7 @@ impl Engine {
             wanted: previous.as_ref().map_or(0, |p| p.wanted),
             etag: etag.clone(),
         };
-        let stop = match self.api.download(token, worlds, install.beta_archive(now()), etag.as_deref()).await {
+        let stop = match self.api.download(token, worlds, etag.as_deref()).await {
             DownloadOutcome::Fresh(data, etag) => {
                 match download::write(&install.path, &data) {
                     Ok(changed) => {
@@ -595,7 +590,7 @@ impl Engine {
             }
         });
         let Ok(mut watcher) = watcher else { return };
-        for install in self.installs().into_iter().filter(|install| !install.beta_ended(now())) {
+        for install in self.installs() {
             for account in install.accounts {
                 if let Some(dir) = account.saved_file.parent() {
                     let _ = watcher.watch(dir, RecursiveMode::NonRecursive);
@@ -635,7 +630,6 @@ fn context(install: &Install, settings: &InstallSettings, known_servers: std::co
         realm_type: settings.realm_type.clone(),
         known_servers,
         addon_version: install.addon_version.clone().unwrap_or_else(|| "unknown".into()),
-        beta_archive: install.beta_archive(now()),
     }
 }
 

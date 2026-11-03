@@ -14,14 +14,6 @@ use crate::payload::Client;
 
 const REGIONS: [&str; 5] = ["us", "eu", "kr", "tw", "cn"];
 
-/// The WoW Forever beta closed for the stress test on 2026-10-21 (21:00 UTC); the website
-/// keeps the beta as an archive from then on (WEB-074).
-pub const BETA_END: i64 = 1_792_616_400;
-
-/// The beta came back after the stress test and closes for good on 2026-10-23 (17:00 UTC);
-/// until then a beta game syncs into the website's beta archive, after it never again.
-pub const BETA_CLOSED: i64 = 1_792_774_800;
-
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Install {
     /// The game folder, e.g. `G:\Games\World of Warcraft\_classic_era_`.
@@ -31,24 +23,9 @@ pub struct Install {
     /// `## Version` of the installed addon, when it is installed.
     pub addon_version: Option<String>,
     /// The game's region: `SET portal` in `WTF\Config.wtf`, else the Battle.net branch of the
-    /// game in the WoW folder's `.build.info` (the beta says it only there).
+    /// game in the WoW folder's `.build.info`.
     pub game_region: Option<String>,
-    /// A beta game: its product (`.flavor.info`), else its folder name, says "beta".
-    pub beta: bool,
     pub accounts: Vec<Account>,
-}
-
-impl Install {
-    /// A beta game after the beta closed for good: its data is never sent again.
-    pub fn beta_ended(&self, now: i64) -> bool {
-        self.beta && now >= BETA_CLOSED
-    }
-
-    /// A beta game between the stress test and the beta's close: it syncs into the
-    /// website's beta archive (the upload and download say `beta`).
-    pub fn beta_archive(&self, now: i64) -> bool {
-        self.beta && (BETA_END..BETA_CLOSED).contains(&now)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -104,16 +81,14 @@ pub fn find(picked: &[PathBuf]) -> Vec<Install> {
             let portal = fs::read_to_string(path.join("WTF").join("Config.wtf")).ok().and_then(|config| portal_region(&config));
             let product = fs::read_to_string(path.join(".flavor.info")).ok().and_then(|flavor| product(&flavor));
             let client = accounts.iter().find_map(|a| fs::read_to_string(&a.saved_file).ok().and_then(|saved| saved_client(&saved)));
-            if is_classic_era(product.as_deref(), client) {
+            if is_classic_era(product.as_deref(), client) || is_beta(product.as_deref(), &path) {
                 continue;
             }
             let branch = product.as_deref().and_then(|product| branch_region(&build_info, product));
-            let beta = product.unwrap_or_else(|| path.file_name().unwrap_or_default().to_string_lossy().to_string()).to_ascii_lowercase().contains("beta");
             installs.push(Install {
                 client,
                 addon_version: addon_version(&path),
                 game_region: portal.or(branch),
-                beta,
                 accounts,
                 path,
             });
@@ -126,6 +101,16 @@ pub fn find(picked: &[PathBuf]) -> Vec<Install> {
 /// not synced, by its product or by the client the addon saved there.
 fn is_classic_era(product: Option<&str>, client: Option<Client>) -> bool {
     client == Some(Client::Era) || product.is_some_and(|product| product.to_ascii_lowercase().contains("classic_era"))
+}
+
+/// The WoW Forever beta closed for good (2026-10-23): a beta or CN beta game is not shown and
+/// not synced, by its product (`.flavor.info`), else by its folder name.
+fn is_beta(product: Option<&str>, game: &Path) -> bool {
+    product
+        .map(String::from)
+        .unwrap_or_else(|| game.file_name().unwrap_or_default().to_string_lossy().to_string())
+        .to_ascii_lowercase()
+        .contains("beta")
 }
 
 fn accounts(game: &Path) -> Vec<Account> {
@@ -243,6 +228,7 @@ mod tests {
         eu|1|1.15.9.70003|wow_classic_era\n\
         us|1|1.60.1.70205|wow_classic_beta\n\
         cn|1|1.60.1.70300|wow_classic_beta_cn\n\
+        us|1|1.60.2.71000|wow_classic_forever\n\
         eu|1|1.60.1.70400|wowf\n";
 
     fn game(root: &Path, name: &str, product: &str) -> PathBuf {
@@ -265,47 +251,40 @@ mod tests {
         fs::write(root.join(".build.info"), BUILD_INFO).unwrap();
         let era = game(&root, "_classic_era_", "wow_classic_era");
         saved(&era, "11111#1", "HeadHunter_DB = {\n[\"meta\"] = {\n[\"client\"] = \"era\",\n},\n}\n");
-        fs::create_dir_all(era.join(r"WTF\Account\22222#1\SavedVariables")).unwrap();
-        fs::create_dir_all(era.join(r"Interface\AddOns\HeadHunter")).unwrap();
-        fs::write(era.join(r"Interface\AddOns\HeadHunter\HeadHunter.toc"), "## Title: HeadHunter\n## Version: 0.1.4\n").unwrap();
+        fs::create_dir_all(era.join("Interface").join("AddOns").join("HeadHunter")).unwrap();
+        fs::write(era.join("Interface").join("AddOns").join("HeadHunter").join("HeadHunter.toc"), "## Title: HeadHunter\n## Version: 0.1.4\n").unwrap();
         let cn = game(&root, "_cn_beta_", "wow_classic_beta_cn");
         saved(&cn, "33333#1", "HeadHunter_DB = {\n[\"meta\"] = {\n[\"client\"] = \"forever\",\n},\n}\n");
-        let release = game(&root, "_classic_forever_", "wow_classic_forever");
-        fs::create_dir_all(release.join(r"Interface\Addons\HeadHunter")).unwrap();
-        fs::write(release.join(r"Interface\Addons\HeadHunter\HeadHunter.toc"), "## Version: 0.3.8\n").unwrap();
         let beta = game(&root, "_classic_beta_", "wow_classic_beta");
-        fs::write(beta.join(r"WTF\Config.wtf"), "SET portal \"test\"\n").unwrap();
         saved(&beta, "44444#1", "HeadHunter_DB = {}\n");
+        let unnamed_beta = root.join("_beta_");
+        fs::create_dir_all(unnamed_beta.join("WTF")).unwrap();
+        saved(&unnamed_beta, "45454#1", "HeadHunter_DB = {}\n");
+        let release = game(&root, "_classic_forever_", "wow_classic_forever");
+        fs::write(release.join("WTF").join("Config.wtf"), "SET portal \"test\"\n").unwrap();
+        fs::create_dir_all(release.join("Interface").join("Addons").join("HeadHunter")).unwrap();
+        fs::write(release.join("Interface").join("Addons").join("HeadHunter").join("HeadHunter.toc"), "## Version: 0.3.8\n").unwrap();
         let forever = game(&root, "_forever_", "wowf");
-        fs::create_dir_all(forever.join(r"Interface\AddOns\HeadHunter")).unwrap();
+        fs::create_dir_all(forever.join("Interface").join("AddOns").join("HeadHunter")).unwrap();
+        saved(&forever, "77777#1", "HeadHunter_DB = {\n[\"meta\"] = {\n[\"client\"] = \"forever\",\n},\n}\n");
+        fs::create_dir_all(forever.join("WTF").join("Account").join("88888#1").join("SavedVariables")).unwrap();
         saved(&game(&root, "_retail_", "wow"), "55555#1", "HeadHunter_DB = {}\n");
         saved(&game(&root, "_classic_era_ptr_", "wow_classic_era_ptr"), "66666#1", "HeadHunter_DB = {}\n");
         game(&root, "_anniversary_", "wow_anniversary");
 
         let installs: Vec<Install> = find(&[cn.clone()]).into_iter().filter(|i| i.path.starts_with(&root)).collect();
         let names: Vec<String> = installs.iter().map(|i| i.path.file_name().unwrap().to_string_lossy().to_string()).collect();
-        assert_eq!(names, ["_classic_beta_", "_classic_forever_", "_cn_beta_", "_forever_"], "picking a game folder finds its siblings; Classic Era is left out");
+        assert_eq!(names, ["_classic_forever_", "_forever_"], "picking a game folder finds its siblings; Classic Era and the beta games are left out");
 
-        let cn_install = &installs[2];
-        assert_eq!(cn_install.client, Some(Client::Forever));
-        assert_eq!(cn_install.accounts.len(), 1, "only accounts that have HeadHunter data");
-        assert_eq!(cn_install.accounts[0].name, "33333#1");
-        assert_eq!(cn_install.game_region.as_deref(), Some("cn"), "the CN beta's branch");
         assert_eq!(installs[0].client, None, "not saved by the addon yet");
         assert_eq!(installs[0].game_region.as_deref(), Some("us"), "the test portal says nothing, the branch does");
-        assert_eq!(installs[1].client, None);
-        assert_eq!(installs[1].addon_version.as_deref(), Some("0.3.8"));
-        assert!(installs[1].accounts.is_empty(), "addon installed, no data yet");
+        assert_eq!(installs[0].addon_version.as_deref(), Some("0.3.8"));
+        assert!(installs[0].accounts.is_empty(), "addon installed, no data yet");
 
-        let betas: Vec<bool> = installs.iter().map(|i| i.beta).collect();
-        assert_eq!(betas, [true, false, true, false], "the beta and CN beta products say beta, the stress test's wowf does not");
-        assert_eq!(installs[3].game_region.as_deref(), Some("eu"), "the stress test's branch");
-        assert!(!installs[0].beta_ended(BETA_CLOSED - 1), "the beta syncs until it closes for good");
-        assert!(installs[0].beta_ended(BETA_CLOSED) && installs[2].beta_ended(BETA_CLOSED));
-        assert!(!installs[1].beta_ended(BETA_CLOSED) && !installs[3].beta_ended(BETA_CLOSED));
-        assert!(!installs[0].beta_archive(BETA_END - 1), "the live beta before the stress test");
-        assert!(installs[0].beta_archive(BETA_END) && installs[0].beta_archive(BETA_CLOSED - 1), "into the archive until the close");
-        assert!(!installs[0].beta_archive(BETA_CLOSED) && !installs[3].beta_archive(BETA_END), "never after it, never the stress test");
+        assert_eq!(installs[1].client, Some(Client::Forever));
+        assert_eq!(installs[1].accounts.len(), 1, "only accounts that have HeadHunter data");
+        assert_eq!(installs[1].accounts[0].name, "77777#1");
+        assert_eq!(installs[1].game_region.as_deref(), Some("eu"), "the wowf branch");
         let _ = fs::remove_dir_all(root);
     }
 

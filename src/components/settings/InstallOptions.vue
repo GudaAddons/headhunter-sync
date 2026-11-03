@@ -59,7 +59,7 @@ const realmType = computed({
                 @update:model-value="(v) => (options = { ...options, enabled: v === true })"
             />
             <span class="font-heading tracking-wide text-gold uppercase">
-                {{ clientLabel(install.client, install.beta) }}
+                {{ clientLabel(install.client) }}
             </span>
             <span class="truncate text-xs font-normal text-muted-foreground">
                 {{ folderName(install.path) }}

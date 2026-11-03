@@ -16,7 +16,7 @@ use crate::payload::Sent;
 pub struct Settings {
     /// WoW folders the player picked, next to the ones found automatically.
     pub wow_folders: Vec<PathBuf>,
-    /// Per install folder (e.g. `...\_classic_beta_`): what the saved data cannot say.
+    /// Per install folder (e.g. `...\_classic_forever_`): what the saved data cannot say.
     pub installs: BTreeMap<String, InstallSettings>,
     /// Upload a few seconds after the game writes HeadHunter.lua.
     pub sync_on_change: bool,
@@ -162,7 +162,7 @@ mod tests {
 
         let mut settings = Settings::default();
         settings.interval_minutes = 15;
-        settings.installs.insert("G:/WoW/_classic_beta_".into(), InstallSettings { realm_type: "hardcore".into(), ..Default::default() });
+        settings.installs.insert("G:/WoW/_classic_forever_".into(), InstallSettings { realm_type: "hardcore".into(), ..Default::default() });
         save(&path, &settings).unwrap();
         assert_eq!(load::<Settings>(&path), settings);
 
@@ -177,8 +177,8 @@ mod tests {
     fn state_keys_keep_the_old_form_without_a_home() {
         assert_eq!(state_key("G:/WoW/_classic_", "ACC1", None, "Tessa-Firemaw"), "G:/WoW/_classic_|ACC1|Tessa-Firemaw");
         assert_eq!(
-            state_key("G:/WoW/_classic_beta_", "ACC1", Some("forever|4619"), "Grim Pvp"),
-            "G:/WoW/_classic_beta_|ACC1|forever|4619|Grim Pvp"
+            state_key("G:/WoW/_classic_forever_", "ACC1", Some("forever|4619"), "Grim Pvp"),
+            "G:/WoW/_classic_forever_|ACC1|forever|4619|Grim Pvp"
         );
     }
 }

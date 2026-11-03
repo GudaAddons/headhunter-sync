@@ -52,7 +52,6 @@ export type InstallStatus = {
     client: Client | null;
     addon_version: string | null;
     settings: InstallSettings;
-    beta: boolean;
     accounts: AccountStatus[];
     download: DownloadResult | null;
 };

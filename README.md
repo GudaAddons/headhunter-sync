@@ -8,8 +8,8 @@ deaths, catches, duels and bounty to the HeadHunter website. It lives in the sys
 syncs on its own: when the game saves (logout, `/reload`, quitting), when it starts, and on a
 timer you choose. "Sync now" is always there too.
 
-Supports **Classic Era** and **WoW Forever** (beta, CN beta and release). Any game folder with HeadHunter
-is found, whatever its name; the client comes from the addon's saved data.
+Supports **WoW Forever**. Any game folder with HeadHunter is found, whatever its name; the client
+comes from the addon's saved data. Classic Era, beta and PTR games are left out.
 
 Design and tickets: `head-hunter-web/docs/app/` (plan.md, tickets.md).
 
