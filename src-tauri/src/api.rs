@@ -149,7 +149,7 @@ impl Api {
             409 => UploadOutcome::Claimed(message(&body).unwrap_or_else(|| i18n::t("This character is linked to another account."))),
             422 => UploadOutcome::Rejected(first_error(&body).unwrap_or_else(|| i18n::t("The website refused the data."))),
             429 => UploadOutcome::Retry(i18n::t("The website asks to slow down; trying again soon.")),
-            _ => UploadOutcome::Retry(i18n::tr("The website answered :status; trying again soon.", &[("status", &status.to_string())])),
+            _ => UploadOutcome::Retry(unexpected(status, "upload", i18n::t("The website is busy or being updated; trying again in a few minutes."), i18n::t("The website could not take this sync; it tries again. If it keeps happening, update HeadHunter Sync."))),
         }
     }
 
@@ -206,7 +206,7 @@ impl Api {
             304 => DownloadOutcome::Unchanged,
             401 | 403 => DownloadOutcome::SignedOut,
             429 => DownloadOutcome::Retry(i18n::t("The website asks to slow down; trying again soon.")),
-            _ => DownloadOutcome::Retry(i18n::tr("The website answered :status for the game data; trying again soon.", &[("status", &status.to_string())])),
+            _ => DownloadOutcome::Retry(unexpected(status, "download", i18n::t("The website is busy or being updated; trying again in a few minutes."), i18n::t("The website could not send the game data; it tries again. If it keeps happening, update HeadHunter Sync."))),
         }
     }
 
@@ -220,8 +220,9 @@ impl Api {
             .send()
             .await
             .map_err(|e| offline_message(&e))?;
+        let status = response.status().as_u16();
         if !response.status().is_success() {
-            return Err(i18n::tr("The website answered :status.", &[("status", &response.status().as_u16().to_string())]));
+            return Err(unexpected(status, "recent uploads", i18n::t("The website is busy or being updated. Try again in a few minutes."), i18n::t("The website could not show the recent uploads. If it keeps happening, update HeadHunter Sync.")));
         }
         let body: Value = response.json().await.map_err(|e| e.to_string())?;
         Ok(body["data"]
@@ -241,7 +242,7 @@ async fn token_answer(response: reqwest::Response, refused: &str) -> Result<(Str
         }
         422 => Err(first_error(&body).unwrap_or_else(|| refused.into())),
         429 => Err(i18n::t("Too many tries. Wait a minute and try again.")),
-        _ => Err(i18n::tr("The website answered :status. Try again later.", &[("status", &status.to_string())])),
+        _ => Err(unexpected(status, "sign-in", i18n::t("The website is busy or being updated. Try again in a few minutes."), i18n::t("The website could not sign you in. If it keeps happening, update HeadHunter Sync."))),
     }
 }
 
@@ -251,8 +252,15 @@ fn screenshot_outcome(status: u16, body: &Value) -> ScreenshotOutcome {
         401 | 403 => ScreenshotOutcome::SignedOut,
         429 => ScreenshotOutcome::Retry(i18n::t("The website asks to slow down; trying again soon.")),
         400..=499 => ScreenshotOutcome::Refused(first_error(body).unwrap_or_else(|| i18n::t("The website refused the data."))),
-        _ => ScreenshotOutcome::Retry(i18n::tr("The website answered :status; trying again soon.", &[("status", &status.to_string())])),
+        _ => ScreenshotOutcome::Retry(unexpected(status, "screenshot", i18n::t("The website is busy or being updated; trying again in a few minutes."), i18n::t("The website could not take this screenshot; it tries again. If it keeps happening, update HeadHunter Sync."))),
     }
+}
+
+/// An answer the app does not expect: the player reads `busy` for a server error (the website
+/// is down or being updated) and `other` for anything else; the status code goes to the log.
+fn unexpected(status: u16, what: &str, busy: String, other: String) -> String {
+    eprintln!("{what}: the website answered {status}");
+    if status >= 500 { busy } else { other }
 }
 
 fn user_from(u: &Value) -> User {
@@ -318,6 +326,17 @@ mod tests {
         assert_eq!(screenshot_outcome(401, &Value::Null), ScreenshotOutcome::SignedOut);
         assert!(matches!(screenshot_outcome(429, &Value::Null), ScreenshotOutcome::Retry(_)));
         assert!(matches!(screenshot_outcome(503, &Value::Null), ScreenshotOutcome::Retry(_)));
+    }
+
+    #[test]
+    fn never_shows_the_status_code() {
+        let busy = || "busy".to_string();
+        let other = || "other".to_string();
+        assert_eq!(unexpected(503, "upload", busy(), other()), "busy");
+        assert_eq!(unexpected(500, "upload", busy(), other()), "busy");
+        assert_eq!(unexpected(404, "upload", busy(), other()), "other");
+        assert_eq!(unexpected(302, "upload", busy(), other()), "other");
+        assert_eq!(screenshot_outcome(503, &Value::Null), ScreenshotOutcome::Retry(i18n::t("The website is busy or being updated; trying again in a few minutes.")));
     }
 
     #[test]
