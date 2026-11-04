@@ -283,6 +283,7 @@ impl Engine {
             return Err(Retry(i18n::t("Sign in to start syncing.")));
         };
         let mut retry: Option<String> = None;
+        let mut gang_actions_sent = false;
 
         for install in self.installs() {
             let install_settings = self.install_settings(&install);
@@ -322,7 +323,11 @@ impl Engine {
                         + upload.payload.punishments.len()
                         + upload.payload.duels.len()
                         + upload.payload.bounty_events.len();
+                    let has_gang_actions = !upload.payload.gang_actions.is_empty();
                     let outcome = self.api.upload(&token, &upload.payload).await;
+                    if has_gang_actions && matches!(outcome, UploadOutcome::Sent) {
+                        gang_actions_sent = true;
+                    }
                     let (name, message, keep) = match &outcome {
                         UploadOutcome::Sent => ("sent", None, true),
                         UploadOutcome::AlreadyThere => ("already_there", None, true),
@@ -381,6 +386,9 @@ impl Engine {
                 }
                 let _ = app.emit("status-changed", ());
             }
+        }
+        if gang_actions_sent {
+            self.request(GANG_RESULTS_AFTER);
         }
         match retry {
             Some(message) => Err(Retry(message)),
@@ -647,6 +655,11 @@ fn display_name(key: &str) -> String {
 fn notify(app: &AppHandle, title: &str, body: &str) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
+
+/// The website imports an upload from its queue a moment after taking it, so the download
+/// right after an upload still has the gang actions waiting (APP-026): one more sync this
+/// long after brings what came of them.
+pub const GANG_RESULTS_AFTER: Duration = Duration::from_secs(15);
 
 pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or_default()
