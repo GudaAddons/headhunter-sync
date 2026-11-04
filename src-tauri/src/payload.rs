@@ -12,6 +12,8 @@
 //! but no deaths uploads too.
 //! Each character's own punishments (addon `punishments`: a Bully or a Deadbeat killed
 //! who was not WANTED) go with that character like its catches.
+//! Each WoW Forever character's own gang actions (addon `gangActions`, HH-155) go with
+//! that character, each once; what came of them comes back with the download.
 //! Demo and simulated records are never sent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +41,10 @@ pub const MAX_HONOR_KILLS: usize = 2000;
 pub const MAX_WARS: usize = 100;
 /// The website takes at most 500 witness records an upload (`StoreUploadRequest::MAX_WITNESSES`).
 pub const MAX_WITNESSES: usize = 500;
+/// The website takes at most 100 gang actions an upload (`StoreUploadRequest::MAX_GANG_ACTIONS`).
+pub const MAX_GANG_ACTIONS: usize = 100;
+/// What a gang action can be (the website's `GangActionKind`).
+const GANG_ACTION_KINDS: [&str; 7] = ["create", "invite", "accept", "leave", "kick", "rename", "lead"];
 /// The addon keeps at most 300 fighters a war (its Alerts/Wars.lua).
 pub const MAX_WAR_FIGHTERS: usize = 300;
 /// The addon's field for the Forever server number (`meta.player`, `deaths[].victim`).
@@ -134,6 +140,9 @@ pub struct Sent {
     /// The newest punishment sent (the addon's `punishments[].t`).
     #[serde(default)]
     pub punishments: i64,
+    /// The newest gang action sent (the addon's `gangActions[].t`).
+    #[serde(default)]
+    pub gang_actions: i64,
     /// The Forever server sent last: a new one is sent even with no new records, so the
     /// website files the character under its server's realm type.
     #[serde(default)]
@@ -185,6 +194,29 @@ pub struct Payload {
     /// website lists them as Punished, next to Busted.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub punishments: Vec<Punishment>,
+    /// The character's gang actions (the addon's `gangActions`, HH-155, WoW Forever only):
+    /// the website imports them from its queue and says what came of each in the download's
+    /// `characters[].gang_results`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gang_actions: Vec<GangAction>,
+}
+
+/// One gang action of a character, as the addon keeps it in `HeadHunter_DB.gangActions`
+/// (in each home): `{ uid = "Tess Rider:1790300000:1", by = "Tess Rider", kind = "invite",
+/// t = 1790300000, name = "Night Owls", player = "Mira Vale", leader = "Grim Tusk" }`.
+/// `kind` is "create" or "rename" with `name`, "invite", "kick" or "lead" with `player`,
+/// "accept" with `leader` (the gang that player leads), "leave" with neither.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct GangAction {
+    pub uid: String,
+    pub kind: String,
+    pub t: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player: Option<PlayerRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader: Option<PlayerRef>,
 }
 
 /// A hunted player the character saw die: when, where, and who landed the blow when the
@@ -686,6 +718,18 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
         let witnesses: Vec<WitnessRecord> = witness_src.iter().filter_map(|w| witness_record(w, client)).collect();
         after.witnesses = max_t(&witness_src, already.witnesses);
 
+        let gang_src = if client == Client::Forever {
+            whole_seconds_limited(
+                values(&db["gangActions"]).filter(|a| text(&a["by"]).as_deref() == Some(&key)),
+                already.gang_actions,
+                MAX_GANG_ACTIONS,
+            )
+        } else {
+            Vec::new()
+        };
+        let gang_actions: Vec<GangAction> = gang_src.iter().filter_map(|a| gang_action(a, client)).collect();
+        after.gang_actions = max_t(&gang_src, already.gang_actions);
+
         let wars_src = ended_wars(&db["wars"], &key, already.wars, MAX_WARS);
         let wars: Vec<War> = wars_src.iter().filter_map(|w| war(w, client)).collect();
         after.wars = wars_src.iter().filter_map(|w| int(&w["ended"])).max().unwrap_or(already.wars).max(already.wars);
@@ -716,6 +760,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             && honor_kills.is_empty()
             && wars.is_empty()
             && witnesses.is_empty()
+            && gang_actions.is_empty()
         {
             continue;
         }
@@ -741,6 +786,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
                 wars,
                 witnesses,
                 punishments,
+                gang_actions,
             },
             sent_after: after,
         });
@@ -795,7 +841,7 @@ fn client_and_region(db: &Value, ctx: &Context) -> Result<(Client, String), Payl
     Ok((client, region))
 }
 
-/// Every character with own deaths, honorable kills or wars, plus the one played last
+/// Every character with own deaths, honorable kills, wars or gang actions, plus the one played last
 /// (and which one that is).
 fn character_keys(db: &Value, deaths: &[&Value]) -> (BTreeSet<String>, Option<String>) {
     let last_player = text(&db[META_FIELD][PLAYER_FIELD]["key"])
@@ -803,6 +849,7 @@ fn character_keys(db: &Value, deaths: &[&Value]) -> (BTreeSet<String>, Option<St
     let mut keys: BTreeSet<String> = deaths.iter().filter_map(|d| text(&d["victim"]["key"])).collect();
     keys.extend(values(&db["honorKills"]).filter_map(|k| text(&k["by"])));
     keys.extend(values(&db["wars"]).filter_map(|w| text(&w["by"])));
+    keys.extend(values(&db["gangActions"]).filter_map(|a| text(&a["by"])));
     keys.extend(last_player.clone());
     (keys, last_player)
 }
@@ -1148,6 +1195,18 @@ fn witness_record(w: &Value, client: Client) -> Option<WitnessRecord> {
         x: float(&w["x"]).filter(|v| (0.0..=1.0).contains(v)),
         y: float(&w["y"]).filter(|v| (0.0..=1.0).contains(v)),
         killer: text(&w["killer"]).and_then(|k| player_ref(&k, client)),
+    })
+}
+
+fn gang_action(a: &Value, client: Client) -> Option<GangAction> {
+    let player = |field: &str| text(&a[field]).and_then(|p| player_ref(&p, client)).filter(|p| p.name.chars().count() <= 80);
+    Some(GangAction {
+        uid: text(&a["uid"]).filter(|u| u.chars().count() <= 96)?,
+        kind: text(&a["kind"]).filter(|k| GANG_ACTION_KINDS.contains(&k.as_str()))?,
+        t: int(&a["t"]).filter(|t| *t >= 1)?,
+        name: text(&a["name"]).map(|n| n.chars().take(64).collect()),
+        player: player("player"),
+        leader: player("leader"),
     })
 }
 
@@ -1937,6 +1996,59 @@ mod tests {
         let none = build(&era_db(), &ctx(Client::Era), |_| Sent::default()).unwrap();
         let json = serde_json::to_value(&by_key(&none, "Tessa-Firemaw").payload).unwrap();
         assert!(json.get("punishments").is_none(), "left out when there are none");
+    }
+
+    #[test]
+    fn sends_each_forever_characters_own_gang_actions_once() {
+        let db = json!({
+            "meta": { "client": "forever", "region": "us", "player": { "key": "Tess Rider", "server": 4620 } },
+            "gangActions": [
+                { "uid": "Tess Rider:100:1", "by": "Tess Rider", "kind": "create", "t": 100, "name": "Night Owls" },
+                { "uid": "Tess Rider:110:1", "by": "Tess Rider", "kind": "invite", "t": 110, "player": "Mira Vale" },
+                { "uid": "Mira Vale:120:1", "by": "Mira Vale", "kind": "accept", "t": 120, "leader": "Tess Rider" },
+                { "uid": "Tess Rider:130:1", "by": "Tess Rider", "kind": "promote", "t": 130 },
+                { "by": "Tess Rider", "kind": "leave", "t": 140 }
+            ]
+        });
+        let uploads = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        let of = |key: &str| uploads.iter().find(|u| u.key == key).unwrap();
+
+        let tess = &of("Tess Rider").payload.gang_actions;
+        assert_eq!(tess.len(), 2, "her own, no unknown kind and none without a uid");
+        assert_eq!((tess[0].kind.as_str(), tess[0].name.as_deref()), ("create", Some("Night Owls")));
+        let json = serde_json::to_value(&of("Tess Rider").payload).unwrap();
+        assert_eq!(json["gang_actions"][1], json!({ "uid": "Tess Rider:110:1", "kind": "invite", "t": 110, "player": { "name": "Mira Vale" } }));
+        assert_eq!(of("Tess Rider").sent_after.gang_actions, 140);
+
+        let mira = &of("Mira Vale").payload;
+        assert_eq!(mira.gang_actions[0].leader.as_ref().map(|l| l.name.as_str()), Some("Tess Rider"), "a character with only gang actions uploads them");
+
+        let later = build(&db, &ctx(Client::Forever), |key| of(key).sent_after.clone()).unwrap();
+        assert!(later.iter().all(|u| u.payload.gang_actions.is_empty()), "sent once");
+
+        let none = build(&forever_db(), &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        assert!(serde_json::to_value(&none[0].payload).unwrap().get("gang_actions").is_none(), "left out when there are none");
+    }
+
+    #[test]
+    fn sends_at_most_a_hundred_gang_actions_and_the_rest_next_time() {
+        let actions: Vec<Value> = (1..=120).map(|t| json!({ "uid": format!("Tess Rider:{t}:1"), "by": "Tess Rider", "kind": "leave", "t": t })).collect();
+        let db = json!({ "meta": { "client": "forever", "region": "us", "player": { "key": "Tess Rider" } }, "gangActions": actions });
+        let first = build(&db, &ctx(Client::Forever), |_| Sent::default()).unwrap();
+        assert_eq!(first[0].payload.gang_actions.len(), MAX_GANG_ACTIONS);
+        assert_eq!(first[0].payload.gang_actions[0].t, 1, "the oldest first");
+
+        let next = build(&db, &ctx(Client::Forever), |_| first[0].sent_after.clone()).unwrap();
+        assert_eq!(next[0].payload.gang_actions.len(), 20);
+        assert_eq!(next[0].payload.gang_actions[0].t, 101);
+    }
+
+    #[test]
+    fn classic_era_characters_send_no_gang_actions() {
+        let mut db = era_db();
+        db["gangActions"] = json!([{ "uid": "Tessa-Firemaw:500:1", "by": "Tessa-Firemaw", "kind": "create", "t": 500, "name": "Night Owls" }]);
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        assert!(by_key(&uploads, "Tessa-Firemaw").payload.gang_actions.is_empty());
     }
 
     #[test]

@@ -4,6 +4,8 @@
 //! login as addon code, so it works on WoW Forever too, where saved variables are not
 //! loaded back. HeadHunter lists it as an optional dependency and reads
 //! `HeadHunter_SiteData`; the data keeps the website's names, the addon maps them.
+//! Gangs (WEB-118) come as they are: `worlds.<key>.gangs` for WoW Forever worlds and
+//! each character's `gang_results`, what came of its gang actions.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -175,6 +177,37 @@ mod tests {
         assert_eq!(punished[0]["hunter"]["name"], "Tessa");
         assert_eq!(punished[1]["kind"], "deadbeat");
         assert_eq!(back["worlds"]["era|eu|Firemaw"]["busted"][0]["glasses"], 2, "the same shape as Busted");
+
+        let _ = fs::remove_dir_all(game.parent().unwrap());
+    }
+
+    #[test]
+    fn writes_the_worlds_gangs_and_each_characters_gang_results() {
+        let game = game_with_addon("gangs");
+        let mut data = site_data();
+        data["worlds"]["forever|us|4620"] = json!({
+            "wanted": [],
+            "gangs": [{ "id": 7, "name": "Night Owls", "faction": "horde", "leader": "Tess Rider", "members": [
+                { "name": "Tess Rider", "realm": null, "faction": "horde", "class": "warrior", "race": "orc", "sex": 3, "level": 20, "joined_at": 1790200000 },
+                { "name": "Mira Vale", "realm": null, "faction": "horde", "class": "mage", "race": "troll", "sex": 2, "level": 18, "joined_at": 1790250000 }
+            ] }]
+        });
+        data["characters"] = json!([{ "name": "Tess Rider", "world": "forever|us|4620", "gang_results": [
+            { "uid": "Tess Rider:110:1", "kind": "invite", "status": "done", "reason": null, "gang": "Night Owls" },
+            { "uid": "Tess Rider:100:1", "kind": "create", "status": "refused", "reason": "name_taken", "gang": null }
+        ] }]);
+        write(&game, &data).unwrap();
+
+        let text = fs::read_to_string(game.join(r"Interface\AddOns\HeadHunter_Data").join(DATA_FILE)).unwrap();
+        let back = lua::read_variable(&text, VARIABLE).unwrap();
+        let gang = &back["worlds"]["forever|us|4620"]["gangs"][0];
+        assert_eq!((gang["id"].as_i64(), gang["name"].as_str(), gang["leader"].as_str()), (Some(7), Some("Night Owls"), Some("Tess Rider")));
+        assert_eq!(gang["members"][1]["name"], "Mira Vale", "members in the website's order");
+        assert_eq!(gang["members"][1]["joined_at"], 1790250000);
+        let results = &back["characters"][0]["gang_results"];
+        assert_eq!(results[0], json!({ "uid": "Tess Rider:110:1", "kind": "invite", "status": "done", "gang": "Night Owls" }), "no reason: left out");
+        assert_eq!((results[1]["status"].as_str(), results[1]["reason"].as_str()), (Some("refused"), Some("name_taken")));
+        assert!(results[1].get("gang").is_none());
 
         let _ = fs::remove_dir_all(game.parent().unwrap());
     }
