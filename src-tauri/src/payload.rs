@@ -205,7 +205,9 @@ pub struct Payload {
 /// (in each home): `{ uid = "Tess Rider:1790300000:1", by = "Tess Rider", kind = "invite",
 /// t = 1790300000, name = "Night Owls", player = "Mira Vale", leader = "Grim Tusk" }`.
 /// `kind` is "create" or "rename" with `name`, "invite", "kick" or "lead" with `player`,
-/// "accept" with `leader` (the gang that player leads), "leave" with neither.
+/// "accept" with `leader` (the gang that player leads), "leave" with neither. "create" and
+/// "kick" also carry the chat channel and password the leader's addon made and joined at once
+/// (`chatChannel`, `chatPassword`), which the website keeps for the gang.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct GangAction {
     pub uid: String,
@@ -217,6 +219,10 @@ pub struct GangAction {
     pub player: Option<PlayerRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leader: Option<PlayerRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_password: Option<String>,
 }
 
 /// A hunted player the character saw die: when, where, and who landed the blow when the
@@ -1207,6 +1213,8 @@ fn gang_action(a: &Value, client: Client) -> Option<GangAction> {
         name: text(&a["name"]).map(|n| n.chars().take(64).collect()),
         player: player("player"),
         leader: player("leader"),
+        chat_channel: text(&a["chatChannel"]).filter(|c| c.chars().count() <= 32),
+        chat_password: text(&a["chatPassword"]).filter(|c| c.chars().count() <= 32),
     })
 }
 
@@ -2003,7 +2011,7 @@ mod tests {
         let db = json!({
             "meta": { "client": "forever", "region": "us", "player": { "key": "Tess Rider", "server": 4620 } },
             "gangActions": [
-                { "uid": "Tess Rider:100:1", "by": "Tess Rider", "kind": "create", "t": 100, "name": "Night Owls" },
+                { "uid": "Tess Rider:100:1", "by": "Tess Rider", "kind": "create", "t": 100, "name": "Night Owls", "chatChannel": "Gang_HHabcdefghijkl", "chatPassword": "pw1" },
                 { "uid": "Tess Rider:110:1", "by": "Tess Rider", "kind": "invite", "t": 110, "player": "Mira Vale" },
                 { "uid": "Mira Vale:120:1", "by": "Mira Vale", "kind": "accept", "t": 120, "leader": "Tess Rider" },
                 { "uid": "Tess Rider:130:1", "by": "Tess Rider", "kind": "promote", "t": 130 },
@@ -2017,6 +2025,8 @@ mod tests {
         assert_eq!(tess.len(), 2, "her own, no unknown kind and none without a uid");
         assert_eq!((tess[0].kind.as_str(), tess[0].name.as_deref()), ("create", Some("Night Owls")));
         let json = serde_json::to_value(&of("Tess Rider").payload).unwrap();
+        assert_eq!(json["gang_actions"][0]["chat_channel"], "Gang_HHabcdefghijkl");
+        assert_eq!(json["gang_actions"][0]["chat_password"], "pw1");
         assert_eq!(json["gang_actions"][1], json!({ "uid": "Tess Rider:110:1", "kind": "invite", "t": 110, "player": { "name": "Mira Vale" } }));
         assert_eq!(of("Tess Rider").sent_after.gang_actions, 140);
 
