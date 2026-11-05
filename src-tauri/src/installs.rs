@@ -51,15 +51,24 @@ fn is_game_folder(folder: &Path) -> bool {
     folder.join(".flavor.info").is_file() || folder.join("WTF").is_dir()
 }
 
+/// A local build started with `HEADHUNTER_NO_AUTODETECT=1` looks only in the picked folders,
+/// as on a PC where the game is found nowhere (never in the production build).
+fn autodetect() -> bool {
+    crate::config::is_production() || std::env::var_os("HEADHUNTER_NO_AUTODETECT").is_none()
+}
+
 /// WoW folders to look in: registry, common paths, then the player's own picks.
 pub fn wow_folders(picked: &[PathBuf]) -> Vec<PathBuf> {
-    let mut folders: Vec<PathBuf> = registry_folders();
-    for common in [
-        r"C:\Program Files (x86)\World of Warcraft",
-        r"C:\Program Files\World of Warcraft",
-        "/Applications/World of Warcraft",
-    ] {
-        folders.push(PathBuf::from(common));
+    let mut folders: Vec<PathBuf> = Vec::new();
+    if autodetect() {
+        folders.extend(registry_folders());
+        for common in [
+            r"C:\Program Files (x86)\World of Warcraft",
+            r"C:\Program Files\World of Warcraft",
+            "/Applications/World of Warcraft",
+        ] {
+            folders.push(PathBuf::from(common));
+        }
     }
     for folder in picked {
         folders.push(if is_game_folder(folder) { folder.parent().map(Path::to_path_buf).unwrap_or_default() } else { folder.clone() });
@@ -141,13 +150,10 @@ fn subfolders(folder: &Path) -> Vec<PathBuf> {
 /// folder above it (LEVELS_UP) or below it (LEVELS_DOWN). `None` when there is none.
 pub fn wow_folder_near(picked: &Path) -> Option<PathBuf> {
     let found = |folder: &Path| is_wow_folder(folder) && has_forever_game(folder);
-    let mut up = Some(picked);
-    for _ in 0..=LEVELS_UP {
-        let folder = up?;
+    for folder in picked.ancestors().take(LEVELS_UP + 1) {
         if found(folder) {
             return Some(folder.to_path_buf());
         }
-        up = folder.parent();
     }
     let mut level = vec![picked.to_path_buf()];
     for _ in 0..LEVELS_DOWN {
@@ -391,6 +397,15 @@ mod tests {
         assert_eq!(wow_folder_near(&forever.join("Interface").join("AddOns")).as_deref(), Some(wow.as_path()), "a folder inside the game");
         assert_eq!(wow_folder_near(&drive.join("Games").join("Battle.net")).as_deref(), Some(wow.as_path()), "the Battle.net folder above it");
         assert_eq!(wow_folder_near(&drive.join("Games")).as_deref(), Some(wow.as_path()), "two levels above it");
+        let near_the_root = PathBuf::from(format!("hh-wow-root-{}", std::process::id()));
+        let shallow = near_the_root.join("Battle.net").join("World of Warcraft");
+        game(&shallow, "_forever_", "wowf");
+        assert_eq!(
+            wow_folder_near(&near_the_root.join("Battle.net")).as_deref(),
+            Some(shallow.as_path()),
+            "a folder near the drive's root, where the folders above run out before LEVELS_UP (G:\\Games\\Battle.net)"
+        );
+        let _ = fs::remove_dir_all(&near_the_root);
 
         let era_only = drive.join("Era").join("World of Warcraft");
         game(&era_only, "_classic_era_", "wow_classic_era");
