@@ -51,6 +51,8 @@ export type InstallStatus = {
     path: string;
     client: Client | null;
     addon_version: string | null;
+    /** HeadHunter is installed in this game; without it nothing is synced there. */
+    has_addon: boolean;
     settings: InstallSettings;
     accounts: AccountStatus[];
     download: DownloadResult | null;

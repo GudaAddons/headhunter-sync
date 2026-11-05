@@ -52,6 +52,8 @@ export function useSync() {
         syncNow: () => invoke('sync_now'),
         getSettings: () => invoke<Settings>('get_settings'),
         saveSettings: (settings: Settings) => invoke('save_settings', { settings }),
+        /** Saves the WoW folder near a picked folder; rejects with the reason when there is none. */
+        addWowFolder: (picked: string) => invoke<string>('add_wow_folder', { picked }),
         setSystemLanguage: (language: string) => invoke('set_system_language', { language }),
         recentUploads: () => invoke<UploadInfo[]>('recent_uploads'),
     };

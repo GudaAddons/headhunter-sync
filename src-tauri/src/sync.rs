@@ -68,6 +68,8 @@ pub struct InstallStatus {
     /// `None` until the addon saved data in this game.
     pub client: Option<Client>,
     pub addon_version: Option<String>,
+    /// HeadHunter is installed in this game; without it nothing is synced there.
+    pub has_addon: bool,
     pub settings: InstallSettings,
     pub accounts: Vec<AccountStatus>,
     /// The last download of the website's data into this game.
@@ -123,6 +125,19 @@ impl Engine {
         self.plan_interval();
         self.rewatch();
         Ok(())
+    }
+
+    /// A folder the player picked: the WoW folder near it (`installs::wow_folder_near`) is kept
+    /// in the settings at once. Returns that WoW folder, or the reason none was kept.
+    pub fn add_wow_folder(self: &Arc<Self>, picked: &std::path::Path) -> Result<PathBuf, String> {
+        let folder = installs::wow_folder_near(picked).ok_or_else(|| i18n::t("No WoW Forever game in this folder."))?;
+        let mut settings = self.settings();
+        let known = |f: &PathBuf| f.to_string_lossy().trim_end_matches(['\\', '/']).eq_ignore_ascii_case(folder.to_string_lossy().trim_end_matches(['\\', '/']));
+        if !settings.wow_folders.iter().any(known) {
+            settings.wow_folders.push(folder.clone());
+            self.save_settings(settings)?;
+        }
+        Ok(folder)
     }
 
     /// The window's system language, for the "auto" setting. True when it changed.
@@ -220,6 +235,7 @@ impl Engine {
                     path,
                     client: install.client,
                     addon_version: install.addon_version.clone(),
+                    has_addon: install.has_addon,
                     accounts,
                 }
             })
@@ -287,7 +303,7 @@ impl Engine {
 
         for install in self.installs() {
             let install_settings = self.install_settings(&install);
-            if !install_settings.enabled {
+            if !install_settings.enabled || !install.has_addon {
                 continue;
             }
             let path = install.path.to_string_lossy().to_string();

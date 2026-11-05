@@ -1,8 +1,10 @@
 //! Finds the WoW games HeadHunter runs on and their saved data. A game folder is any folder
-//! in a WoW folder that has the addon installed or `WTF\Account\<account>\SavedVariables\HeadHunter.lua`;
-//! its name does not matter, so new Blizzard folders need no app update. The client comes from
-//! the addon's saved `meta.client`. The WoW folder comes from the Blizzard registry keys, common
-//! install paths and folders the player picked (the WoW folder itself or one of its game folders).
+//! in a WoW folder that has the addon installed or `WTF\Account\<account>\SavedVariables\HeadHunter.lua`,
+//! or whose product is WoW Forever (shown before the addon is installed, and not synced until
+//! it is); its name does not matter, so new Blizzard folders need no app update. The client
+//! comes from the addon's saved `meta.client`. The WoW folder comes from the Blizzard registry
+//! keys, common install paths and folders the player picked: any folder near the WoW folder
+//! (`wow_folder_near`) is turned into the WoW folder before it is kept.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -23,6 +25,9 @@ pub struct Install {
     pub client: Option<Client>,
     /// `## Version` of the installed addon, when it is installed.
     pub addon_version: Option<String>,
+    /// HeadHunter is installed in this game (`Interface\AddOns\HeadHunter`); a game without it
+    /// is shown but neither uploaded nor downloaded.
+    pub has_addon: bool,
     /// The game's region: `SET portal` in `WTF\Config.wtf`, else the Battle.net branch of the
     /// game in the WoW folder's `.build.info`.
     pub game_region: Option<String>,
@@ -64,41 +69,94 @@ pub fn wow_folders(picked: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 pub fn find(picked: &[PathBuf]) -> Vec<Install> {
+    wow_folders(picked).iter().flat_map(|root| find_in(root)).collect()
+}
+
+/// The games of one WoW folder.
+fn find_in(root: &Path) -> Vec<Install> {
     let mut installs = Vec::new();
-    for root in wow_folders(picked) {
-        let Ok(entries) = fs::read_dir(&root) else { continue };
-        let build_info = fs::read_to_string(root.join(".build.info")).unwrap_or_default();
-        let mut games: Vec<PathBuf> = entries
-            .flatten()
-            .filter(|e| e.path().is_dir() && !is_skipped(&e.file_name().to_string_lossy()))
-            .map(|e| e.path())
-            .collect();
-        games.sort();
-        for path in games {
-            let accounts = accounts(&path);
-            if accounts.is_empty() && addons_dir(&path).is_none() {
-                continue;
-            }
-            let portal = fs::read_to_string(path.join("WTF").join("Config.wtf")).ok().and_then(|config| portal_region(&config));
-            let product = fs::read_to_string(path.join(".flavor.info")).ok().and_then(|flavor| product(&flavor));
-            let client = accounts
-                .iter()
-                .find_map(|a| fs::read_to_string(&a.saved_file).ok().and_then(|saved| saved_client(&saved)))
-                .or_else(|| is_forever(product.as_deref()).then_some(Client::Forever));
-            if is_classic_era(product.as_deref(), client) || is_beta(product.as_deref(), &path) {
-                continue;
-            }
-            let branch = product.as_deref().and_then(|product| branch_region(&build_info, product));
-            installs.push(Install {
-                client,
-                addon_version: addon_version(&path),
-                game_region: portal.or(branch),
-                accounts,
-                path,
-            });
+    let Ok(entries) = fs::read_dir(root) else { return installs };
+    let build_info = fs::read_to_string(root.join(".build.info")).unwrap_or_default();
+    let mut games: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir() && !is_skipped(&e.file_name().to_string_lossy()))
+        .map(|e| e.path())
+        .collect();
+    games.sort();
+    for path in games {
+        let accounts = accounts(&path);
+        let has_addon = addons_dir(&path).is_some();
+        let product = fs::read_to_string(path.join(".flavor.info")).ok().and_then(|flavor| product(&flavor));
+        if accounts.is_empty() && !has_addon && !is_forever(product.as_deref()) {
+            continue;
         }
+        let portal = fs::read_to_string(path.join("WTF").join("Config.wtf")).ok().and_then(|config| portal_region(&config));
+        let client = accounts
+            .iter()
+            .find_map(|a| fs::read_to_string(&a.saved_file).ok().and_then(|saved| saved_client(&saved)))
+            .or_else(|| is_forever(product.as_deref()).then_some(Client::Forever));
+        if is_classic_era(product.as_deref(), client) || is_beta(product.as_deref(), &path) {
+            continue;
+        }
+        let branch = product.as_deref().and_then(|product| branch_region(&build_info, product));
+        installs.push(Install {
+            client,
+            addon_version: addon_version(&path),
+            has_addon,
+            game_region: portal.or(branch),
+            accounts,
+            path,
+        });
     }
     installs
+}
+
+/// How far from a picked folder the WoW folder is looked for: up (a game folder, or a folder
+/// inside one such as `_forever_\Interface\AddOns`) and down (`D:\Games\Battle.net` or `D:\Games`).
+const LEVELS_UP: usize = 3;
+const LEVELS_DOWN: usize = 2;
+
+/// A WoW folder: not a game folder itself, with a game folder in it.
+fn is_wow_folder(folder: &Path) -> bool {
+    if is_game_folder(folder) {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(folder) else { return false };
+    entries.flatten().any(|e| e.path().is_dir() && is_game_folder(&e.path()))
+}
+
+/// True when the WoW folder holds a WoW Forever game.
+fn has_forever_game(wow_folder: &Path) -> bool {
+    find_in(wow_folder).iter().any(|install| install.client == Some(Client::Forever))
+}
+
+fn subfolders(folder: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(folder) else { return Vec::new() };
+    let mut folders: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    folders.sort();
+    folders
+}
+
+/// The WoW folder with a WoW Forever game nearest to a picked folder: the folder itself, a
+/// folder above it (LEVELS_UP) or below it (LEVELS_DOWN). `None` when there is none.
+pub fn wow_folder_near(picked: &Path) -> Option<PathBuf> {
+    let found = |folder: &Path| is_wow_folder(folder) && has_forever_game(folder);
+    let mut up = Some(picked);
+    for _ in 0..=LEVELS_UP {
+        let folder = up?;
+        if found(folder) {
+            return Some(folder.to_path_buf());
+        }
+        up = folder.parent();
+    }
+    let mut level = vec![picked.to_path_buf()];
+    for _ in 0..LEVELS_DOWN {
+        level = level.iter().flat_map(|folder| subfolders(folder)).collect();
+        if let Some(folder) = level.iter().find(|folder| found(folder)) {
+            return Some(folder.clone());
+        }
+    }
+    None
 }
 
 /// HeadHunter is for WoW Forever only (2026-10-10): a Classic Era game is not shown and
@@ -301,6 +359,44 @@ mod tests {
         assert_eq!(installs[2].accounts[0].name, "77777#1");
         assert_eq!(installs[2].game_region.as_deref(), Some("eu"), "the wowf branch");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shows_a_wow_forever_game_before_the_addon_is_installed() {
+        let root = std::env::temp_dir().join(format!("hh-wow-new-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let forever = game(&root, "_forever_", "wowf");
+        game(&root, "_retail_", "wow");
+
+        let installs = find_in(&root);
+        assert_eq!(installs.len(), 1, "the WoW Forever game, though HeadHunter is not there yet");
+        assert_eq!(installs[0].client, Some(Client::Forever));
+        assert!(!installs[0].has_addon, "not synced until the addon is installed");
+
+        fs::create_dir_all(forever.join("Interface").join("AddOns").join("HeadHunter")).unwrap();
+        fs::write(forever.join("Interface").join("AddOns").join("HeadHunter").join("HeadHunter.toc"), "## Version: 1.0.2\n").unwrap();
+        assert!(find_in(&root)[0].has_addon, "synced once it is");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn finds_the_wow_folder_near_any_folder_the_player_picks() {
+        let drive = std::env::temp_dir().join(format!("hh-wow-pick-{}", std::process::id()));
+        let wow = drive.join("Games").join("Battle.net").join("World of Warcraft");
+        let forever = game(&wow, "_forever_", "wowf");
+        fs::create_dir_all(forever.join("Interface").join("AddOns")).unwrap();
+
+        assert_eq!(wow_folder_near(&wow).as_deref(), Some(wow.as_path()), "the WoW folder itself");
+        assert_eq!(wow_folder_near(&forever).as_deref(), Some(wow.as_path()), "its game folder");
+        assert_eq!(wow_folder_near(&forever.join("Interface").join("AddOns")).as_deref(), Some(wow.as_path()), "a folder inside the game");
+        assert_eq!(wow_folder_near(&drive.join("Games").join("Battle.net")).as_deref(), Some(wow.as_path()), "the Battle.net folder above it");
+        assert_eq!(wow_folder_near(&drive.join("Games")).as_deref(), Some(wow.as_path()), "two levels above it");
+
+        let era_only = drive.join("Era").join("World of Warcraft");
+        game(&era_only, "_classic_era_", "wow_classic_era");
+        assert_eq!(wow_folder_near(&era_only), None, "a WoW folder without WoW Forever is not kept");
+        assert_eq!(wow_folder_near(&drive.join("Nothing")), None, "nor a folder with no game near it");
+        let _ = fs::remove_dir_all(drive);
     }
 
     #[test]

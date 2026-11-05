@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { CircleCheckIcon } from '@lucide/vue';
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import InstallOptions from '@/components/settings/InstallOptions.vue';
 import LanguageSelect from '@/components/settings/LanguageSelect.vue';
 import ScreenshotOptions from '@/components/settings/ScreenshotOptions.vue';
 import SyncTiming from '@/components/settings/SyncTiming.vue';
 import WowFolders from '@/components/settings/WowFolders.vue';
-import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import type { InstallSettings, InstallStatus, Settings } from '@/types';
 
@@ -14,20 +13,43 @@ const props = defineProps<{
     installs: InstallStatus[];
     load: () => Promise<Settings>;
     save: (settings: Settings) => Promise<unknown>;
+    addWowFolder: (picked: string) => Promise<string>;
 }>();
+
+/** Milliseconds a change waits before it is saved, so typing or quick clicks save once. */
+const SAVE_DELAY = 400;
 
 const emit = defineEmits<{
     saved: [];
 }>();
 
 const settings = ref<Settings | null>(null);
-const saving = ref(false);
 const saved = ref(false);
 const error = ref<string | null>(null);
 
-onMounted(async () => {
+let timer: number | undefined;
+let loading = true;
+
+async function reload(): Promise<void> {
+    loading = true;
     settings.value = await props.load();
-});
+}
+
+onMounted(reload);
+
+/** Every change saves on its own, a moment after the last one. */
+watch(
+    settings,
+    () => {
+        if (loading) {
+            loading = false;
+            return;
+        }
+        window.clearTimeout(timer);
+        timer = window.setTimeout(submit, SAVE_DELAY);
+    },
+    { deep: true },
+);
 
 function optionsFor(install: InstallStatus): InstallSettings {
     return settings.value?.installs[install.path] ?? install.settings;
@@ -46,7 +68,6 @@ async function submit(): Promise<void> {
     if (!settings.value) {
         return;
     }
-    saving.value = true;
     error.value = null;
     try {
         await props.save(settings.value);
@@ -55,8 +76,6 @@ async function submit(): Promise<void> {
         emit('saved');
     } catch (e) {
         error.value = String(e);
-    } finally {
-        saving.value = false;
     }
 }
 </script>
@@ -66,7 +85,11 @@ async function submit(): Promise<void> {
         v-if="settings"
         class="frame-gold flex flex-col gap-5 rounded-md bg-card/90 p-5"
     >
-        <WowFolders v-model="settings.wow_folders" />
+        <WowFolders
+            v-model="settings.wow_folders"
+            :add="addWowFolder"
+            @added="reload"
+        />
         <div v-if="installs.length" class="flex flex-col gap-2">
             <InstallOptions
                 v-for="install in installs"
@@ -79,7 +102,7 @@ async function submit(): Promise<void> {
         <p v-else class="text-sm text-wanted">
             {{
                 $t(
-                    'No Classic Era or WoW Forever folder found. Add your World of Warcraft folder above.',
+                    'No WoW Forever folder found. Choose your World of Warcraft folder.',
                 )
             }}
         </p>
@@ -90,10 +113,7 @@ async function submit(): Promise<void> {
         <Separator />
         <LanguageSelect v-model="settings.language" />
         <p v-if="error" class="text-sm text-wanted">{{ error }}</p>
-        <div class="flex items-center gap-3">
-            <Button variant="gold" :disabled="saving" @click="submit">
-                {{ $t('Save') }}
-            </Button>
+        <div class="flex h-5 items-center gap-3">
             <span
                 v-if="saved"
                 class="flex items-center gap-1 text-sm text-emerald-400"

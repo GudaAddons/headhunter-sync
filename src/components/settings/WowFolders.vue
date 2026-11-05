@@ -1,20 +1,17 @@
 <script setup lang="ts">
-import { FolderPlusIcon, XIcon } from '@lucide/vue';
-import { open } from '@tauri-apps/plugin-dialog';
+import { XIcon } from '@lucide/vue';
+import ChooseWowFolder from '@/components/settings/ChooseWowFolder.vue';
 import { Button } from '@/components/ui/button';
-import { trans } from '@/lib/i18n';
 
 const folders = defineModel<string[]>({ required: true });
 
-async function add(): Promise<void> {
-    const picked = await open({
-        directory: true,
-        title: trans('Pick your World of Warcraft folder (or one of its game folders)'),
-    });
-    if (typeof picked === 'string' && !folders.value.includes(picked)) {
-        folders.value = [...folders.value, picked];
-    }
-}
+defineProps<{
+    add: (picked: string) => Promise<string>;
+}>();
+
+const emit = defineEmits<{
+    added: [folder: string];
+}>();
 
 function remove(folder: string): void {
     folders.value = folders.value.filter((f) => f !== folder);
@@ -52,9 +49,6 @@ function remove(folder: string): void {
                 </Button>
             </li>
         </ul>
-        <Button variant="outline" class="self-start" @click="add">
-            <FolderPlusIcon />
-            {{ $t('Add a WoW folder') }}
-        </Button>
+        <ChooseWowFolder :add="add" @added="(folder) => emit('added', folder)" />
     </section>
 </template>

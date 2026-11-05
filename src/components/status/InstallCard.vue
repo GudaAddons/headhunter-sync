@@ -42,8 +42,15 @@ defineProps<{
 
         <GameDataLine v-if="install.download" :download="install.download" />
 
+        <p v-if="!install.has_addon" class="text-sm text-wanted">
+            {{
+                $t(
+                    'HeadHunter is not installed in this game yet. Install the addon and log in once: syncing starts then.',
+                )
+            }}
+        </p>
         <p
-            v-if="!install.accounts.length"
+            v-else-if="!install.accounts.length"
             class="text-sm text-muted-foreground"
         >
             {{

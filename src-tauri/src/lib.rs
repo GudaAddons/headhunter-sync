@@ -137,6 +137,15 @@ fn apply_start_with_system(app: &AppHandle, engine: &Engine) {
     }
 }
 
+/// A folder picked in the window: the WoW folder near it is saved and synced at once.
+#[tauri::command]
+fn add_wow_folder(app: AppHandle, engine: Shared<'_>, picked: String) -> Result<String, String> {
+    let folder = engine.add_wow_folder(std::path::Path::new(&picked))?;
+    let _ = app.emit("status-changed", ());
+    engine.request(Duration::ZERO);
+    Ok(folder.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 async fn recent_uploads(engine: Shared<'_>) -> Result<Vec<UploadInfo>, String> {
     let token = store::token().ok_or_else(|| i18n::t("Sign in first."))?;
@@ -269,6 +278,7 @@ pub fn run() {
             sync_now,
             get_settings,
             save_settings,
+            add_wow_folder,
             set_system_language,
             recent_uploads,
             check_update,

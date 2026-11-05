@@ -4,6 +4,7 @@ import SignInForm from '@/components/auth/SignInForm.vue';
 import AppFooter from '@/components/layout/AppFooter.vue';
 import AppHeader from '@/components/layout/AppHeader.vue';
 import UpdateBanner from '@/components/layout/UpdateBanner.vue';
+import ChooseWowFolder from '@/components/settings/ChooseWowFolder.vue';
 import SettingsPanel from '@/components/settings/SettingsPanel.vue';
 import InstallCard from '@/components/status/InstallCard.vue';
 import RecentUploads from '@/components/status/RecentUploads.vue';
@@ -70,16 +71,22 @@ async function signOut(): Promise<void> {
                         :key="install.path"
                         :install="install"
                     />
-                    <p
+                    <div
                         v-if="!status.installs.length"
-                        class="frame-gold rounded-md bg-card/90 p-5 text-sm"
+                        class="frame-gold flex flex-col gap-3 rounded-md bg-card/90 p-5 text-sm"
                     >
-                        {{
-                            $t(
-                                'No Classic Era or WoW Forever folder found. Add your World of Warcraft folder in Settings.',
-                            )
-                        }}
-                    </p>
+                        <p>
+                            {{
+                                $t(
+                                    'No WoW Forever folder found. Choose your World of Warcraft folder.',
+                                )
+                            }}
+                        </p>
+                        <ChooseWowFolder
+                            :add="sync.addWowFolder"
+                            @added="sync.refresh"
+                        />
+                    </div>
                     <RecentUploads :load="sync.recentUploads" />
                 </TabsContent>
 
@@ -88,6 +95,7 @@ async function signOut(): Promise<void> {
                         :installs="status.installs"
                         :load="sync.getSettings"
                         :save="sync.saveSettings"
+                        :add-wow-folder="sync.addWowFolder"
                         @saved="sync.refresh"
                     />
                 </TabsContent>
