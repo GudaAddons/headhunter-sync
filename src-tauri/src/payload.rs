@@ -12,6 +12,8 @@
 //! but no deaths uploads too.
 //! Each character's own punishments (addon `punishments`: a Bully or a Deadbeat killed
 //! who was not WANTED) go with that character like its catches.
+//! The catches other HeadHunters' addons told ours about in game (origin `peer`, never
+//! relayed ones; website WEB-123) go with the last played character, naming their hunter.
 //! Each WoW Forever character's own gang actions (addon `gangActions`, HH-155) go with
 //! that character, each once; what came of them comes back with the download.
 //! Demo and simulated records are never sent.
@@ -140,6 +142,12 @@ pub struct Sent {
     /// The newest punishment sent (the addon's `punishments[].t`).
     #[serde(default)]
     pub punishments: i64,
+    /// The newest catch heard from another HeadHunter sent (the addon's `justice[].t`,
+    /// origin `peer`); from 0, so the first sync with it sends the 30 days the addon keeps.
+    /// The newest of all the account's characters counts, so playing another one sends
+    /// nothing twice.
+    #[serde(default)]
+    pub peer_catches: i64,
     /// The newest gang action sent (the addon's `gangActions[].t`).
     #[serde(default)]
     pub gang_actions: i64,
@@ -422,6 +430,10 @@ pub struct Catch {
     pub outlaw: PlayerRef,
     pub map_id: Option<i64>,
     pub killer_name: Option<String>,
+    /// Another HeadHunter who made a catch the addon heard straight from their addon in
+    /// game (origin `peer`, website WEB-123); none for our own catches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hunter: Option<PlayerRef>,
 }
 
 /// A catch of a Hall of Shame player who was not WANTED, with its kind ("bully" or "deadbeat").
@@ -574,6 +586,7 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
     let (keys, last_player) = character_keys(db, &deaths);
 
     let own = keys.clone();
+    let peer_catches_sent = keys.iter().map(|key| sent(key).peer_catches).max().unwrap_or(0);
     let mut uploads = Vec::new();
     for key in keys {
         let is_last = last_player.as_deref() == Some(key.as_str());
@@ -599,8 +612,16 @@ pub fn build(db: &Value, ctx: &Context, sent: impl Fn(&str) -> Sent) -> Result<V
             already.catches,
             MAX_CATCHES,
         );
-        let catches: Vec<Catch> = catches_src.iter().filter_map(|j| catch(j, client)).collect();
+        let mut catches: Vec<Catch> = catches_src.iter().filter_map(|j| catch(j, client)).collect();
         after.catches = max_t(&catches_src, already.catches);
+
+        let peer_src = if is_last {
+            newest_first_limited(peer_catches(db, &own), peer_catches_sent, MAX_CATCHES - catches.len())
+        } else {
+            Vec::new()
+        };
+        catches.extend(peer_src.iter().filter_map(|j| peer_catch(j, client)));
+        after.peer_catches = max_t(&peer_src, peer_catches_sent);
 
         let punishments_src = newest_first_limited(
             values(&db["punishments"]).filter(|p| {
@@ -1022,7 +1043,25 @@ fn catch(j: &Value, client: Client) -> Option<Catch> {
         outlaw: PlayerRef { name, realm, ..PlayerRef::default() },
         map_id: int(&j["mapID"]).filter(|m| *m >= 1),
         killer_name: text(&j["killer"]).map(|k| split_key(&k, client).0),
+        hunter: None,
     })
+}
+
+/// The catches other HeadHunters' addons told ours about in game (origin `peer`, website
+/// WEB-123), never relayed ones, not our own characters' and no demo ones. They go with the
+/// last played character, after its own catches, within the 500 catches an upload takes.
+fn peer_catches<'a>(db: &'a Value, own: &'a BTreeSet<String>) -> impl Iterator<Item = &'a Value> + 'a {
+    values(&db["justice"]).filter(move |j| {
+        text(&j["origin"]).as_deref() == Some("peer")
+            && !flag(&j["demo"])
+            && text(&j["hunter"]).is_some_and(|hunter| !own.contains(&hunter))
+    })
+}
+
+/// A peer's catch with its hunter; one whose outlaw or hunter is known only by GUID is left out.
+fn peer_catch(j: &Value, client: Client) -> Option<Catch> {
+    let hunter = player_ref(&text(&j["hunter"])?, client)?;
+    Some(Catch { hunter: Some(hunter), ..catch(j, client)? })
 }
 
 fn punishment(p: &Value, client: Client) -> Option<Punishment> {
@@ -1483,7 +1522,7 @@ mod tests {
         assert_eq!(main.character.class.as_deref(), Some("priest"));
         assert_eq!(main.character.realm_type, None);
         assert_eq!(main.deaths.len(), 1, "sim and demo deaths stay home");
-        assert_eq!(main.catches.len(), 1, "guid outlaws and other hunters' catches stay home");
+        assert_eq!(main.catches.len(), 2, "our own and a peer's catch, no guid outlaw");
         assert_eq!(main.duels.len(), 2, "our own and shared duels, no demo");
         assert_eq!(main.bounty_events.len(), 2, "own and hunter-less events, no skip");
         assert_eq!(main.zones.len(), 2);
@@ -1494,6 +1533,36 @@ mod tests {
         assert_eq!(alt.deaths.len(), 1);
         assert_eq!(alt.bounty_events.len(), 1);
         assert!(alt.duels.is_empty() && alt.zones.is_empty(), "duels and zones go with the last played character");
+    }
+
+    #[test]
+    fn sends_the_catches_heard_from_peers_with_their_hunter_once() {
+        let mut db = era_db();
+        let justice = db["justice"].as_object_mut().unwrap();
+        justice.insert("Relayed-Firemaw:180".into(), json!({ "outlaw": "Relayed-Firemaw", "t": 180, "hunter": "Someone-Firemaw", "origin": "relay" }));
+        justice.insert("Demo-Firemaw:190".into(), json!({ "outlaw": "Demo-Firemaw", "t": 190, "hunter": "Someone-Firemaw", "origin": "peer", "demo": true }));
+        justice.insert("Mine-Firemaw:195".into(), json!({ "outlaw": "Mine-Firemaw", "t": 195, "hunter": "Alt-Firemaw", "origin": "peer" }));
+
+        let uploads = build(&db, &ctx(Client::Era), |_| Sent::default()).unwrap();
+        let main = by_key(&uploads, "Tessa-Firemaw");
+        let own = main.payload.catches.iter().find(|c| c.t == 150).unwrap();
+        let heard = main.payload.catches.iter().find(|c| c.t == 170).unwrap();
+        assert_eq!(main.payload.catches.len(), 2, "no relayed, demo or own characters' peer catches");
+        assert_eq!(own.hunter, None);
+        assert_eq!(heard.outlaw.name, "Other");
+        assert_eq!(heard.hunter.as_ref().map(|h| h.name.as_str()), Some("Someone"));
+        assert_eq!(heard.hunter.as_ref().and_then(|h| h.realm.as_deref()), Some("Firemaw"));
+        assert_eq!(main.sent_after.peer_catches, 170);
+        assert_eq!(main.sent_after.catches, 160);
+        assert!(by_key(&uploads, "Alt-Firemaw").payload.catches.is_empty(), "only with the last character");
+
+        let sent: BTreeMap<String, Sent> = uploads.iter().map(|u| (u.key.clone(), u.sent_after.clone())).collect();
+        let again = build(&db, &ctx(Client::Era), |key| sent.get(key).cloned().unwrap_or_default()).unwrap();
+        assert!(again.iter().all(|u| u.payload.catches.is_empty()), "each catch once");
+
+        db["meta"]["player"]["key"] = json!("Alt-Firemaw");
+        let switched = build(&db, &ctx(Client::Era), |key| sent.get(key).cloned().unwrap_or_default()).unwrap();
+        assert!(switched.iter().all(|u| u.payload.catches.is_empty()), "not again after playing another character");
     }
 
     #[test]
